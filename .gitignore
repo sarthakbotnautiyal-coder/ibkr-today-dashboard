@@ -1,0 +1,25 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local config
+.env
+*.local
+
+# OS
+.DS_Store
+
+# Logs (dev only — runtime logs go to /Users/ubexbot/logs/)
+*.log
+
+# Phase 0 only — screenshots for review
+screenshots/
+
+# Test artifacts
+.pytest_cache/
