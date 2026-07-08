@@ -72,7 +72,13 @@ ET = ZoneInfo("America/New_York")
 
 CACHE_DIR = Path.home() / ".cache" / "ibkr_today"
 LOG_OFFSET_PATH = CACHE_DIR / "log_offset"
-ENGINE_PGREP_PATTERN = r"ibkr_trader_engine.*run\.py"
+# Marker substring that identifies the engine's cwd. The engine process's
+# argv[0] shows only 'run.py' (the shell wrapper sets cwd but not argv[0]),
+# so pgrep alone cannot distinguish it from the 5+ sibling run.py processes
+# (spx_dashboard, 5556_dashboard, wc2026_dashboard, premium_extractor,
+# gex_extractor). We pgrep all run.py candidates then filter by cwd.
+ENGINE_PGREP_PATTERN = r"ibkr_trader_engine.*run\.py"  # legacy, unused (kept for grep back-compat)
+IBKR_ENGINE_CWD_MARKER = "/ibkr_trader_engine"  # suffix-match cwd path
 IS_MARKET_OPEN_SCRIPT = "/Users/ubexbot/.openclaw/vault/vault/SharedResources/Scripts/is_market_open.py"
 
 PAGE_TITLE = "ibkr_today"
@@ -388,14 +394,39 @@ def parse_exit_votes(rows: list[dict], n: int = EXIT_CHECK_SAMPLE_N) -> dict:
 # ---------------------------------------------------------------------------
 
 def engine_pid() -> int | None:
-    """Find ibkr engine PID via pgrep, or None."""
+    """Find ibkr engine PID via cwd-based detection.
+
+    The engine process's argv shows just "run.py" (the shell wrapper sets
+    cwd but not argv[0]), so the previous pattern "ibkr_trader_engine.*run\\.py"
+    never matched and Panel 1 always reported RED STOPPED while the engine
+    was alive (TASK-2026-329).
+
+    Approach: pgrep all "run.py" candidates (returns 5+ sibling processes
+    today: spx_dashboard, 5556_dashboard, wc2026_dashboard, premium_extractor,
+    gex_extractor, plus the engine), then filter by cwd using lsof.
+
+    Note: `lsof -p PID -d cwd` without -a OR-combines the filters on macOS
+    and lists every process's cwd. Adding -a forces AND so we get ONLY the
+    cwd of the given PID (verified 2026-07-08 10:20 ET with all six siblings).
+    """
     try:
         out = subprocess.run(
-            ["pgrep", "-f", ENGINE_PGREP_PATTERN],
+            ["pgrep", "-f", r"run\.py"],
             capture_output=True, text=True, timeout=2.0,
         )
-        pids = [int(p) for p in out.stdout.split() if p.strip().isdigit()]
-        return pids[0] if pids else None
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        for p_str in out.stdout.split():
+            pid = int(p_str.strip())
+            lsof_out = subprocess.run(
+                ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-F", "n"],
+                capture_output=True, text=True, timeout=2.0,
+            )
+            # -F n output: one or more `n<path>` lines; pick the cwd line
+            for line in lsof_out.stdout.splitlines():
+                if line.startswith("n") and IBKR_ENGINE_CWD_MARKER in line:
+                    return pid
+        return None
     except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
         return None
 
