@@ -1,49 +1,93 @@
 """
-ibkr_today — Phase 0 Wireframe Spike
-====================================
-Single-file Streamlit dashboard rendering all 8 panels with representative
-DUMMY data shaped to today's actual (2026-07-07) engine activity.
+ibkr_today — Phase 1 (Real Data Wiring)
+=======================================
+Single-file Streamlit dashboard for IBKR engine live visualization.
 
-Metadata (for Obsidian / repo tracking — not interpreted by Python):
----
-task_id: TASK-2026-327
-master_task: "[[Tasks/Master/TASK-2026-327-ibkr-today-dashboard-design]]"
-phase: 0-wireframe
----
-
-GATE: Awaiting Sarthak wireframe approval before Phase 1 (real data wiring).
-
-Data sources for Phase 1 (not wired here):
-- $IBKR_ENGINE_DIR/data/positions.db (SQLite, mode=ro, uri=True)
+Wires 8 panels to real engine sources:
+- $IBKR_ENGINE_DIR/data/positions.db    (SQLite, mode=ro, uri=True, query_only)
 - $IBKR_ENGINE_DIR/logs/engine_YYYY-MM-DD.log (offset-cached tail)
 
-For Phase 0 Panel 8, we read the last 20 lines of the real log as a sample
-to demonstrate stream rendering. No live updates in Phase 0.
+Architecture:
+- SQLite RO via `file:...?mode=ro` + PRAGMA query_only=ON (per TASK-2026-326)
+- WAL retry pattern (Layer-1) from KB SQLite-WAL-Resilience.md
+- Atomic offset cache via tmpfile + replace (no partial writes)
+- Process liveness via pgrep — pattern matches run.py invocation
+- Market-hours gate via SharedResources/Scripts/is_market_open.py
+
+Predecessor: TASK-2026-327 (Phase 0 wireframe, commit 3a88e9d)
+
+---
+task_id: TASK-2026-328
+master_task: "[[Tasks/Master/TASK-2026-328-ibkr-today-dashboard-phase1-deploy]]"
+parent: "[[TASK-2026-327-ibkr-today-dashboard-design]]"
+phase: 1-real-data
+---
 """
 
 from __future__ import annotations
 
+import os
 import re
-from datetime import datetime, timedelta
+import sqlite3
+import subprocess
+import tempfile
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 # ---------------------------------------------------------------------------
-# Config
+# Config layer
 # ---------------------------------------------------------------------------
 
-ENGINE_DIR = Path("/Users/ubexbot/.openclaw/workspace-venkat/ibkr_trader_engine")
-LOG_PATH = ENGINE_DIR / "logs" / "engine_2026-07-07.log"
-LOG_SAMPLE_LINES = 20
+def _load_dotenv(env_path: Path) -> None:
+    """Tiny .env loader: KEY=VALUE per line. No python-dotenv dep."""
+    if not env_path.exists():
+        return
+    try:
+        text = env_path.read_text()
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k:
+            os.environ.setdefault(k, v)
+
+
+_load_dotenv(Path(__file__).parent / ".env")
+
+DEFAULT_ENGINE_DIR = "/Users/ubexbot/.openclaw/workspace-venkat/ibkr_trader_engine"
+ENGINE_DIR = Path(os.environ.get("IBKR_ENGINE_DIR", DEFAULT_ENGINE_DIR))
+DB_PATH = ENGINE_DIR / "data" / "positions.db"
+ET = ZoneInfo("America/New_York")
+
+CACHE_DIR = Path.home() / ".cache" / "ibkr_today"
+LOG_OFFSET_PATH = CACHE_DIR / "log_offset"
+ENGINE_PGREP_PATTERN = r"ibkr_trader_engine.*run\.py"
+IS_MARKET_OPEN_SCRIPT = "/Users/ubexbot/.openclaw/vault/vault/SharedResources/Scripts/is_market_open.py"
 
 PAGE_TITLE = "ibkr_today"
 PAGE_ICON = "📈"
+REFRESH_MS = 5000
+DECISION_STREAM_LINES = 50
+EXIT_CHECK_SAMPLE_N = 50
+
+# Resolved today's log path (frozen at startup; rolls on day change at next refresh)
+TODAY: date = datetime.now(ET).date()
+LOG_PATH = ENGINE_DIR / "logs" / f"engine_{TODAY.isoformat()}.log"
+
 
 # ---------------------------------------------------------------------------
-# Page config + theme (must be first Streamlit call)
+# Page config + theme
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
@@ -55,139 +99,64 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
-  /* Streamlit default #0e1117 background */
   .stApp { background-color: #0e1117; }
   section.main > div { padding-top: 1rem; }
 
-  /* Panel cards */
-  .panel {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
-  }
-  .panel h3 {
-    margin: 0 0 10px 0;
-    font-size: 12px;
-    font-weight: 600;
-    color: #8b949e;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin: 0 0 6px 0;
-  }
+  .panel { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .panel h3 { margin: 0 0 10px 0; font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
 
-  /* Health strip metrics */
   .metric-row { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
   .metric { display: flex; flex-direction: column; gap: 2px; }
   .metric .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
   .metric .value { font-size: 18px; color: #e6edf3; font-weight: 600; }
   .metric .value.mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; }
 
-  /* Status pill */
-  .pill {
-    display: inline-block;
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
   .pill-green { background: #0d4429; color: #00d97e; border: 1px solid #00d97e; }
   .pill-red { background: #4d1417; color: #ff4b4b; border: 1px solid #ff4b4b; }
   .pill-amber { background: #4d3a14; color: #f0a020; border: 1px solid #f0a020; }
   .pill-blue { background: #14294d; color: #58a6ff; border: 1px solid #58a6ff; }
+  .pill-grey { background: #21262d; color: #8b949e; border: 1px solid #6e7681; }
 
-  /* Big number for P&L */
-  .big-number {
-    font-size: 40px;
-    font-weight: 700;
-    line-height: 1;
-    margin: 4px 0;
-    font-feature-settings: 'tnum';
-  }
+  .big-number { font-size: 40px; font-weight: 700; line-height: 1; margin: 4px 0; font-feature-settings: 'tnum'; }
   .big-number.pos { color: #00d97e; }
   .big-number.neg { color: #ff4b4b; }
   .big-number.zero { color: #8b949e; }
 
-  /* Sub counts grid for P&L panel */
   .counts-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
   .count-cell { background: #0d1117; padding: 4px 8px; border-radius: 6px; text-align: center; }
   .count-cell .c-label { font-size: 9px; color: #8b949e; text-transform: uppercase; }
   .count-cell .c-value { font-size: 18px; font-weight: 600; color: #e6edf3; margin-top: 1px; }
 
-  /* Mono log */
   .log-line { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; padding: 2px 6px; color: #c9d1d9; }
   .log-line.INFO { color: #c9d1d9; }
-  .log-line.WARN { color: #f0a020; }
+  .log-line.WARNING { color: #f0a020; }
   .log-line.ERROR { color: #ff4b4b; }
   .log-line .tag { color: #58a6ff; font-weight: 600; }
   .log-line .ts { color: #6e7681; }
 
-  /* Dataframe tweaks */
   .stDataFrame { font-size: 12px; }
 
-  /* Donut */
   .donut-wrap { display: flex; align-items: center; gap: 16px; }
-  .donut {
-    width: 110px; height: 110px; border-radius: 50%;
-    background: conic-gradient(
-      #6e7681 0% 40%,
-      #58a6ff 40% 70%,
-      #00d97e 70% 100%
-    );
-    position: relative;
-    flex-shrink: 0;
-  }
-  .donut::after {
-    content: '';
-    position: absolute;
-    inset: 18px;
-    border-radius: 50%;
-    background: #161b22;
-  }
+  .donut { width: 110px; height: 110px; border-radius: 50%; position: relative; flex-shrink: 0; }
+  .donut::after { content: ''; position: absolute; inset: 18px; border-radius: 50%; background: #161b22; }
   .donut-legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
   .donut-legend .item { display: flex; align-items: center; gap: 6px; }
   .donut-legend .sw { width: 10px; height: 10px; border-radius: 2px; }
 
-  /* Closed table footer */
-  .table-footer {
-    display: flex; gap: 24px; margin-top: 8px; padding-top: 8px;
-    border-top: 1px solid #21262d; font-size: 13px; color: #8b949e;
-  }
+  .table-footer { display: flex; gap: 24px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d; font-size: 13px; color: #8b949e; }
   .table-footer .fv { color: #e6edf3; font-weight: 600; }
   .table-footer .fv.green { color: #00d97e; }
 
-  /* Open positions empty state */
-  .empty-state {
-    text-align: center;
-    padding: 24px 16px;
-    color: #6e7681;
-    border: 1px dashed #21262d;
-    border-radius: 6px;
-    background: #0d1117;
-  }
+  .empty-state { text-align: center; padding: 24px 16px; color: #6e7681; border: 1px dashed #21262d; border-radius: 6px; background: #0d1117; }
   .empty-state .big { font-size: 28px; margin-bottom: 6px; color: #8b949e; }
 
-  /* Entries list */
-  .entry-row {
-    display: grid;
-    grid-template-columns: 60px 140px 1fr 80px 70px;
-    gap: 10px;
-    padding: 3px 8px;
-    font-size: 12px;
-    font-family: 'SF Mono', Menlo, Consolas, monospace;
-    border-bottom: 1px solid #21262d;
-  }
+  .entry-row { display: grid; grid-template-columns: 60px 140px 1fr 80px 70px; gap: 10px; padding: 3px 8px; font-size: 12px; font-family: 'SF Mono', Menlo, Consolas, monospace; border-bottom: 1px solid #21262d; }
   .entry-row.header { color: #8b949e; font-family: inherit; text-transform: uppercase; font-size: 10px; }
   .entry-row .pnl.pos { color: #00d97e; }
   .entry-row .pnl.neg { color: #ff4b4b; }
 
-  /* Header bar */
-  .top-bar {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 6px;
-  }
+  .top-bar { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .top-bar h1 { margin: 0; font-size: 18px; color: #e6edf3; }
   .top-bar .clock { font-family: 'SF Mono', Menlo, Consolas, monospace; color: #8b949e; font-size: 13px; }
 </style>
@@ -195,185 +164,629 @@ CUSTOM_CSS = """
 
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Auto-refresh — every 5s, unlimited
-# ---------------------------------------------------------------------------
-
-st_autorefresh(interval=5000, limit=None, key="refresh")
 
 # ---------------------------------------------------------------------------
-# Dummy data — shaped to 2026-07-07 actual
+# Auto-refresh (5s)
 # ---------------------------------------------------------------------------
 
-NOW = datetime.now()  # ticks on every 5s autorefresh (Phase 0 demo)
-TODAY = NOW.date()
+st_autorefresh(interval=REFRESH_MS, limit=None, key="refresh")
 
-
-def _fmt_money(value: float) -> str:
-    sign = "+" if value >= 0 else "-"
-    return f"{sign}${abs(value):,.2f}"
-
-
-# Panel 1 — Engine Health
-HEALTH = {
-    "pid": 12345,
-    "uptime": "06:35",  # 09:30 → 16:05
-    "status": "stopped",  # engine stopped at 16:05
-    "last_log": "TICK SPX=7503.35 | EM=3.02 | GEX=1 | regime=neutral",
-    "last_log_age_s": 32,
-    "log_size": "1.1 MB",
-    "warn_count": 185,
-    "err_count": 0,
-    "started_at": NOW.replace(hour=9, minute=30, second=0),
-    "db_mtime": NOW - timedelta(seconds=45),
-}
-
-# Panel 2 — P&L Summary
-PNL = {
-    "realized": 116.00,
-    "unrealized": 0.00,
-    "counts": {"open": 0, "closed": 5, "signals": 12, "rejected": 8},
-}
-
-# Panel 3 — Live Signal Intent
-TICK = {
-    "spx": "7503.35",
-    "em": "3.02",
-    "gex": "1",
-    "regime": "neutral",
-    "rsi": "49.1",
-    "gex_regime": "dealer_long",
-    "ts": "15:59:52 ET",
-}
-LAYER = "L2"
-RECENT_ENTRIES = [
-    {"pos_id": 33, "side": "CALL", "strike": "7555/7575", "credit": 0.21, "fill_status": "filled", "fill_latency_s": 314},
-    {"pos_id": 32, "side": "PUT", "strike": "7405/7385", "credit": 0.35, "fill_status": "filled", "fill_latency_s": 31},
-    {"pos_id": 31, "side": "PUT", "strike": "7415/7395", "credit": 0.24, "fill_status": "filled", "fill_latency_s": 73},
-    {"pos_id": 30, "side": "PUT", "strike": "7420/7400", "credit": 0.22, "fill_status": "filled", "fill_latency_s": 64},
-    {"pos_id": 29, "side": "PUT", "strike": "7425/7415", "credit": 0.21, "fill_status": "filled", "fill_latency_s": 269},
-]
-SKIP_REASONS = {
-    "premium_failed": 23,
-    "overlap_detected": 16,
-    "spot_distance_failed": 7,
-}
-
-# Panel 4 — Open Positions (0 today)
-OPEN_POSITIONS: list[dict] = []
-
-# Panel 5 — Closed Today
-CLOSED_TODAY = [
-    {"pos_id": 29, "side": "PUT", "strike": "7425/7415", "entry_time": "09:34", "exit_time": "16:00", "hold": "6h26m", "credit": 0.20, "exit": 0.00, "pnl": 20.00, "reason": "EOD_EXPIRE"},
-    {"pos_id": 30, "side": "PUT", "strike": "7420/7400", "entry_time": "09:46", "exit_time": "16:00", "hold": "6h14m", "credit": 0.20, "exit": 0.00, "pnl": 20.00, "reason": "EOD_EXPIRE"},
-    {"pos_id": 31, "side": "PUT", "strike": "7415/7395", "entry_time": "10:12", "exit_time": "16:00", "hold": "5h48m", "credit": 0.20, "exit": 0.00, "pnl": 20.00, "reason": "EOD_EXPIRE"},
-    {"pos_id": 32, "side": "PUT", "strike": "7405/7385", "entry_time": "10:15", "exit_time": "16:00", "hold": "5h45m", "credit": 0.35, "exit": 0.00, "pnl": 35.00, "reason": "EOD_EXPIRE"},
-    {"pos_id": 33, "side": "CALL", "strike": "7555/7575", "entry_time": "12:01", "exit_time": "16:00", "hold": "3h59m", "credit": 0.20, "exit": 0.00, "pnl": 21.00, "reason": "EOD_EXPIRE"},
-]
-
-# Panel 6 — Rejection Funnel
-REJECTION_COUNTS = {
-    "premium_failed": 4,
-    "overlap_detected": 3,
-    "max_positions": 1,
-    "day_gate": 0,
-}
-
-# Panel 7 — Exit Vote Tally (last [EXIT CHECK] aggregate)
-VOTE_TALLY = {
-    "votes=0 [STAY]": 18,   # dominant — neutral mean-reversion regime
-    "votes=1 [STAY]": 6,
-    "votes=2 [EXIT]": 1,
-}
+NOW = datetime.now(ET)
 
 
 # ---------------------------------------------------------------------------
-# Panel 8 — Engine Decision Stream (sample from real log)
+# SQLite RO reader + retry (Layer-1 WAL resilience)
 # ---------------------------------------------------------------------------
 
-TAG_RE = re.compile(r"\[(INFO|WARN|ERROR)\]")
-TAGNAME_RE = re.compile(r"\[(TICK|ENTRY|ENTRY_PENDING|FILLED_CONFIRMED|EXIT CHECK|EOD_EXPIRE|ENTRY_TIMEOUT|SKIP|COMBO_MKTDATA_CANCEL)\]")
+def open_ro(db_path: Path, retries: int = 3) -> sqlite3.Connection:
+    """Open SQLite in read-only mode with brief WAL-contention retry.
+
+    Hard rules per TASK-2026-326:
+        uri=True + mode=ro + PRAGMA query_only=ON
+    """
+    if not db_path.exists():
+        raise FileNotFoundError(f"DB not found: {db_path}")
+    uri = f"file:{db_path}?mode=ro"
+    last_err: sqlite3.OperationalError | None = None
+    for i in range(retries):
+        try:
+            conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+            conn.execute("PRAGMA query_only=ON")
+            return conn
+        except sqlite3.OperationalError as e:
+            last_err = e
+            if i < retries - 1:
+                time.sleep(0.05 * (i + 1))  # 50/100/150ms
+    raise last_err if last_err else RuntimeError("open_ro failed without exception")
 
 
-def _parse_log_sample(path: Path, n: int) -> list[dict]:
-    """Read last n lines of log file; return parsed rows. Phase-0 sample only."""
-    if not path.exists():
-        return []
+def safe_query(sql: str, params: tuple = ()) -> tuple[pd.DataFrame | None, str | None]:
+    """Run SQL; return (df, None) on success or (None, error_msg) on persistent failure.
+
+    Wrapper used by all panel fetchers — single point of failure handling.
+    """
     try:
-        with path.open("r") as f:
-            lines = f.readlines()
+        with open_ro(DB_PATH) as conn:
+            return pd.read_sql_query(sql, conn, params=params), None
+    except FileNotFoundError:
+        return None, f"DB missing at {DB_PATH}"
+    except sqlite3.OperationalError as e:
+        return None, f"DB locked after 3 retries: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Log tail reader with atomic offset cache
+# ---------------------------------------------------------------------------
+
+TICK_RE = re.compile(
+    r"\[TICK\]\s+SPX=(?P<spx>[\d.]+)\s*\|\s*EM=(?P<em>[\d.]+)\s*\|\s*GEX=(?P<gex>[\d-]+)\s*\|\s*regime=(?P<regime>\S+)\s*\|\s*RSI=(?P<rsi>[\d.]+)\s*\|\s*GEX_regime=(?P<gex_regime>\S+)"
+)
+ENTRY_RE = re.compile(
+    r"\[ENTRY\]\s+(?P<side>PUT|CALL)\s*\|\s*strike=(?P<strike>\S+)\s*\|\s*credit=\$(?P<credit>[\d.]+)\s*\|\s*layer=(?P<layer>\d+)"
+)
+SKIP_RE = re.compile(r"\[SKIP\]\s+(?P<side>PUT|CALL)\s*\|\s*reason=(?P<reason>[^\s|]+)")
+EXIT_CHECK_RE = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pos_id>\d+)")
+EXIT_VOTES_RE = re.compile(r"votes=(?P<v_n>\d+)/(?P<v_m>\d+)")
+LEVEL_RE = re.compile(r"\[(INFO|WARNING|ERROR)\]")
+TAG_RE = re.compile(r"\[(TICK|ENTRY|ENTRY_PENDING|FILLED_CONFIRMED|EXIT CHECK|EOD_EXPIRE|ENTRY_TIMEOUT|SKIP|OPENED|CLOSED_CONFIRMED|DAY_GATE|STALE|STARTUP|ORDER_[A-Z_]+|COMBO_[A-Z_]+|IBKR [A-Z]+|STREAMING|EXIT)\]")
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Atomic write: tmpfile + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_log_tail_incremental() -> list[str]:
+    """Read log from cached byte offset to EOF; persist new offset.
+
+    Returns the newly-read lines only (delta). Caller decides whether to
+    accumulate across renders. On first run, offset is 0 → returns all lines.
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    offset = 0
+    if LOG_OFFSET_PATH.exists():
+        try:
+            offset = int((LOG_OFFSET_PATH.read_text().strip() or "0"))
+        except ValueError:
+            offset = 0
+
+    if not LOG_PATH.exists():
+        return []
+
+    try:
+        file_size = LOG_PATH.stat().st_size
+        if offset > file_size:
+            offset = 0  # rotated/truncated
+
+        with LOG_PATH.open("rb") as f:
+            f.seek(offset)
+            raw = f.read()
+
+        new_offset = offset + len(raw)
+        _atomic_write_text(LOG_OFFSET_PATH, str(new_offset))
+
+        if not raw:
+            return []
+        return raw.decode("utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    sample = lines[-n:]
+
+
+# Accumulator across script reloads: persists as session_state of the Streamlit run.
+# Streamlit re-runs the script on autorefresh, but session_state survives within the
+# Streamlit server's session lifetime (~5s of polling keeps the session alive).
+if "log_lines" not in st.session_state:
+    st.session_state["log_lines"] = []
+if "log_loaded_mtime" not in st.session_state:
+    st.session_state["log_loaded_mtime"] = 0.0
+
+new_lines = read_log_tail_incremental()
+if new_lines:
+    st.session_state["log_lines"].extend(new_lines)
+    # Cap memory
+    if len(st.session_state["log_lines"]) > 20000:
+        st.session_state["log_lines"] = st.session_state["log_lines"][-20000:]
+LOG_LINES: list[str] = st.session_state["log_lines"]
+
+
+def parse_log_rows(lines: list[str]) -> list[dict]:
+    """Parse log lines into typed rows: ts, level, tag, msg."""
     rows: list[dict] = []
-    for line in sample:
-        line = line.rstrip("\n")
-        m_level = TAG_RE.search(line)
-        m_tag = TAGNAME_RE.search(line)
+    for line in lines:
+        if not line:
+            continue
+        m_lvl = LEVEL_RE.search(line)
+        m_tag = TAG_RE.search(line)
+        ts_match = re.search(r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ET", line)
         rows.append({
-            "ts": line.split(" ET ", 1)[0] if " ET " in line else line[:20],
-            "level": m_level.group(1) if m_level else "?",
-            "tag": m_tag.group(1) if m_tag else "-",
+            "ts": ts_match.group("ts") if ts_match else "",
+            "level": m_lvl.group(1) if m_lvl else "?",
+            "tag": m_tag.group(1) if m_tag else "",
             "msg": line,
         })
     return rows
 
 
-LOG_SAMPLE = _parse_log_sample(LOG_PATH, LOG_SAMPLE_LINES)
+def parse_tick(rows: list[dict]) -> dict | None:
+    """Get most recent [TICK] row → parsed dict."""
+    for r in reversed(rows):
+        if r["tag"] == "TICK":
+            m = TICK_RE.search(r["msg"])
+            if m:
+                return {"ts": r["ts"], **m.groupdict()}
+    return None
+
+
+def parse_entries(rows: list[dict], n: int = 5) -> list[dict]:
+    """Get most recent N [ENTRY] rows."""
+    out = []
+    for r in reversed(rows):
+        if r["tag"] == "ENTRY":
+            m = ENTRY_RE.search(r["msg"])
+            if m:
+                out.append({"ts": r["ts"], **m.groupdict()})
+                if len(out) >= n:
+                    break
+    return out
+
+
+def parse_skips(rows: list[dict], n: int = 5) -> tuple[list[dict], dict]:
+    """Return (recent_n_skips, reason_counts_full_day)."""
+    recent: list[dict] = []
+    counts: dict[str, int] = {}
+    for r in rows:
+        if r["tag"] == "SKIP":
+            m = SKIP_RE.search(r["msg"])
+            if m:
+                reason = m.group("reason")
+                counts[reason] = counts.get(reason, 0) + 1
+                if len(recent) < n:
+                    recent.append({"ts": r["ts"], **m.groupdict()})
+    recent.reverse()
+    counts_full = dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+    return recent, counts_full
+
+
+def parse_exit_votes(rows: list[dict], n: int = EXIT_CHECK_SAMPLE_N) -> dict:
+    """Count last N [EXIT CHECK] by vote bucket (votes=N/M)."""
+    tally = {"votes=0 [STAY]": 0, "votes=1 [STAY]": 0, "votes=2+ [EXIT]": 0}
+    sample = []
+    for r in reversed(rows):
+        if r["tag"] == "EXIT CHECK":
+            sample.append(r["msg"])
+            m = EXIT_VOTES_RE.search(r["msg"])
+            if m:
+                v_n = int(m.group("v_n"))
+                v_m = int(m.group("v_m"))
+                if v_m == 0:
+                    continue
+                if v_n >= v_m:
+                    tally["votes=2+ [EXIT]"] += 1
+                elif v_n == 1:
+                    tally["votes=1 [STAY]"] += 1
+                else:
+                    tally["votes=0 [STAY]"] += 1
+            if len(sample) >= n:
+                break
+    return tally
 
 
 # ---------------------------------------------------------------------------
-# Render
+# Process + market status
 # ---------------------------------------------------------------------------
 
-# Top bar
+def engine_pid() -> int | None:
+    """Find ibkr engine PID via pgrep, or None."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", ENGINE_PGREP_PATTERN],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        pids = [int(p) for p in out.stdout.split() if p.strip().isdigit()]
+        return pids[0] if pids else None
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def engine_uptime(pid: int) -> timedelta | None:
+    """Process uptime via ps -o etime=."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "etime="],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        s = out.stdout.strip()
+        if not s:
+            return None
+        # etime format: [[DD-]HH:]MM:SS
+        days = 0
+        if "-" in s:
+            d, s = s.split("-", 1)
+            days = int(d)
+        h, m, sec = s.split(":")
+        return timedelta(days=days, hours=int(h), minutes=int(m), seconds=int(sec))
+    except (subprocess.SubprocessError, ValueError):
+        return None
+
+
+def market_open_today() -> bool | None:
+    """True if NYSE open today, False if closed, None on script error."""
+    try:
+        out = subprocess.run(
+            ["python3", IS_MARKET_OPEN_SCRIPT],
+            capture_output=True, text=True, timeout=5.0,
+        )
+        if out.returncode == 0 and "OPEN" in out.stdout:
+            return True
+        if out.returncode == 1 and "CLOSED" in out.stdout:
+            return False
+        return None
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Panel 1 — Engine Health
+# ---------------------------------------------------------------------------
+
+def panel1_health() -> dict:
+    pid = engine_pid()
+    db_mtime_age_s: float | None = None
+    if DB_PATH.exists():
+        db_mtime_age_s = (time.time() - DB_PATH.stat().st_mtime)
+
+    log_size_b = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+
+    last_log_line = ""
+    log_mtime_age_s: float | None = None
+    if LOG_PATH.exists():
+        try:
+            log_size = LOG_PATH.stat().st_size
+            with LOG_PATH.open("rb") as f:
+                f.seek(max(0, log_size - 4096))
+                tail_b = f.read()
+            tail = tail_b.decode("utf-8", errors="replace").splitlines()
+            # last non-empty
+            for ln in reversed(tail):
+                if ln.strip():
+                    last_log_line = ln.strip()
+                    break
+            log_mtime_age_s = time.time() - LOG_PATH.stat().st_mtime
+        except OSError:
+            pass
+
+    warn_count = sum(1 for ln in LOG_LINES if "[WARNING]" in ln)
+    err_count = sum(1 for ln in LOG_LINES if "[ERROR]" in ln)
+
+    uptime = engine_uptime(pid) if pid else None
+
+    status = "stopped" if pid is None else "running"
+
+    return {
+        "pid": pid,
+        "status": status,
+        "uptime_s": int(uptime.total_seconds()) if uptime else None,
+        "last_log": last_log_line[:200],
+        "last_log_age_s": int(log_mtime_age_s) if log_mtime_age_s is not None else None,
+        "log_size_b": log_size_b,
+        "warn_count": warn_count,
+        "err_count": err_count,
+        "db_age_s": int(db_mtime_age_s) if db_mtime_age_s is not None else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Panel 2 — P&L
+# ---------------------------------------------------------------------------
+
+def panel2_pnl() -> dict:
+    df, err = safe_query(
+        "SELECT SUM(pnl) AS realized, COUNT(*) AS n "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') AND DATE(close_time) = DATE('now', '-4 hours')",
+    )
+    # NB: positions.close_time is "YYYY-MM-DDTHH:MM:SS-04:00" (ISO with offset) so DATE() works on local SQLite.
+    realized = float(df["realized"].iloc[0]) if df is not None and df["realized"].iloc[0] is not None else 0.0
+    n_closed = int(df["n"].iloc[0]) if df is not None and df["n"].iloc[0] is not None else 0
+
+    df_open, _ = safe_query(
+        "SELECT COUNT(*) AS n FROM positions WHERE status = 'open' AND DATE(open_time) <= DATE('now', '-4 hours')"
+    )
+    n_open = int(df_open["n"].iloc[0]) if df_open is not None and df_open["n"].iloc[0] is not None else 0
+
+    df_sig, _ = safe_query("SELECT COUNT(*) AS n FROM signals WHERE DATE(timestamp) = DATE('now', '-4 hours')")
+    n_signals = int(df_sig["n"].iloc[0]) if df_sig is not None and df_sig["n"].iloc[0] is not None else 0
+
+    # Unrealized: parse latest uPnL per open position from log
+    unrealized = 0.0
+    if df_open is not None and n_open > 0:
+        df_open_pos, _ = safe_query(
+            "SELECT id, ticker, short_strike, long_strike FROM positions "
+            "WHERE status = 'open' AND DATE(open_time) <= DATE('now', '-4 hours')"
+        )
+        if df_open_pos is not None:
+            pos_ids = set(int(x) for x in df_open_pos["id"].tolist())
+            latest_per_pos: dict[int, float] = {}
+            upnl_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?uPnL=\$?(?P<sign>[+\-]?)(?P<val>[\d.]+)")
+            for ln in reversed(LOG_LINES):
+                m = upnl_re.search(ln)
+                if m:
+                    pid = int(m.group("pid"))
+                    if pid in pos_ids and pid not in latest_per_pos:
+                        v = float(m.group("val"))
+                        latest_per_pos[pid] = v * (1 if m.group("sign") != "-" else -1)
+                    if len(latest_per_pos) == len(pos_ids):
+                        break
+            unrealized = sum(latest_per_pos.values())
+
+    return {
+        "realized": realized,
+        "unrealized": unrealized,
+        "counts": {
+            "open": n_open,
+            "closed_today": n_closed,
+            "signals_today": n_signals,
+            "skips_today": sum(1 for ln in LOG_LINES if "[SKIP]" in ln),
+        },
+        "error": err,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Panel 3 — Signal Intent
+# ---------------------------------------------------------------------------
+
+def panel3_signal_intent() -> dict:
+    rows = parse_log_rows(LOG_LINES)
+    tick = parse_tick(rows)
+    entries = parse_entries(rows, n=5)
+    _, skip_counts = parse_skips(rows, n=5)
+
+    return {
+        "tick": tick,
+        "entries": entries,
+        "skip_counts": skip_counts,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Panel 4 — Open Positions
+# ---------------------------------------------------------------------------
+
+def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
+    df, err = safe_query(
+        "SELECT id, ticker, side, short_strike, long_strike, open_time, status, layer, "
+        "       entry_regime, entry_spx_spot, credit, fill_price, fill_time "
+        "FROM positions "
+        "WHERE status = 'open' AND DATE(open_time) <= DATE('now', '-4 hours') "
+        "ORDER BY open_time"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame(), err
+    # Compute uPnL from latest EXIT CHECK per pos
+    pos_ids = [int(x) for x in df["id"].tolist()]
+    latest_upnl: dict[int, float] = {pid: 0.0 for pid in pos_ids}
+    upnl_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?uPnL=\$?(?P<sign>[+\-]?)(?P<val>[\d.]+)")
+    for ln in reversed(LOG_LINES):
+        m = upnl_re.search(ln)
+        if m:
+            pid = int(m.group("pid"))
+            if pid in pos_ids and pid in latest_upnl:
+                v = float(m.group("val"))
+                latest_upnl[pid] = v * (1 if m.group("sign") != "-" else -1)
+    df["upnl"] = df["id"].map(lambda p: latest_upnl.get(int(p), 0.0))
+    return df, err
+
+
+# ---------------------------------------------------------------------------
+# Panel 5 — Closed Today
+# ---------------------------------------------------------------------------
+
+def panel5_closed_today() -> tuple[pd.DataFrame, str | None]:
+    df, err = safe_query(
+        "SELECT id, ticker, side, short_strike, long_strike, open_time, close_time, "
+        "       credit, pnl, status, exit_regime, fill_time, fill_price "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') AND DATE(close_time) = DATE('now', '-4 hours') "
+        "ORDER BY close_time DESC"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame(), err
+    return df, err
+
+
+# ---------------------------------------------------------------------------
+# Panel 6 — Rejection Funnel
+# ---------------------------------------------------------------------------
+
+def panel6_rejections() -> dict:
+    # DB signals (post-decision fills=0)
+    df, _ = safe_query(
+        "SELECT blocked_reason AS reason, COUNT(*) AS n FROM signals "
+        "WHERE DATE(timestamp) = DATE('now', '-4 hours') AND filled = 0 AND blocked_reason IS NOT NULL "
+        "GROUP BY blocked_reason"
+    )
+    db_counts: dict[str, int] = {}
+    if df is not None and not df.empty:
+        for _, r in df.iterrows():
+            db_counts[r["reason"]] = int(r["n"])
+
+    # Log SKIPs (broader — pre-signal-gate rejections)
+    _, log_counts = parse_skips(parse_log_rows(LOG_LINES), n=0)
+    return {"db_counts": db_counts, "log_counts": log_counts}
+
+
+# ---------------------------------------------------------------------------
+# Panel 7 — Exit Vote Tally
+# ---------------------------------------------------------------------------
+
+def panel7_exit_votes() -> dict:
+    return parse_exit_votes(parse_log_rows(LOG_LINES))
+
+
+# ---------------------------------------------------------------------------
+# Panel 8 — Decision Stream
+# ---------------------------------------------------------------------------
+
+def panel8_decision_stream(n: int = DECISION_STREAM_LINES) -> list[dict]:
+    rows = parse_log_rows(LOG_LINES)
+    return rows[-n:]
+
+
+# ---------------------------------------------------------------------------
+# Fetch all (cached for 5s via Streamlit's autorefresh + our own state)
+# ---------------------------------------------------------------------------
+
+HEALTH = panel1_health()
+PNL = panel2_pnl()
+SIGNAL_INTENT = panel3_signal_intent()
+OPEN_POS_DF, OPEN_POS_ERR = panel4_open_positions()
+CLOSED_DF, CLOSED_ERR = panel5_closed_today()
+REJECTIONS = panel6_rejections()
+VOTE_TALLY = panel7_exit_votes()
+DECISION_STREAM = panel8_decision_stream()
+
+MARKET_OPEN = market_open_today()
+
+
+# ---------------------------------------------------------------------------
+# Status pill logic
+# ---------------------------------------------------------------------------
+
+def status_pill_state() -> tuple[str, str]:
+    """Return (status_text, pill_class)."""
+    if HEALTH["pid"] is None:
+        return "STOPPED", "pill-red"
+    # Process alive: running or paused based on market
+    if MARKET_OPEN is True:
+        return "RUNNING", "pill-green"
+    if MARKET_OPEN is False:
+        return "PAUSED", "pill-amber"
+    return "RUNNING", "pill-green"  # market check failed; process is alive
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_money(value: float, signed: bool = True) -> str:
+    if signed:
+        sign = "+" if value >= 0 else "-"
+        return f"{sign}${abs(value):,.2f}"
+    return f"${value:,.2f}"
+
+
+def _fmt_uptime(secs: int | None) -> str:
+    if secs is None:
+        return "—"
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+def _parse_hhmm(iso_ts: str) -> str:
+    """Extract HH:MM from '2026-07-07T09:34:37-04:00' → '09:34'."""
+    if not iso_ts:
+        return ""
+    try:
+        return datetime.fromisoformat(iso_ts).strftime("%H:%M")
+    except (ValueError, TypeError):
+        return ""
+
+
+def _parse_hold(open_iso: str, close_iso: str) -> str:
+    """Compute hold duration HH:MM → '05h45m'."""
+    if not open_iso or not close_iso:
+        return ""
+    try:
+        o = datetime.fromisoformat(open_iso)
+        c = datetime.fromisoformat(close_iso)
+        secs = int((c - o).total_seconds())
+        if secs < 0:
+            return ""
+        h, rem = divmod(secs, 3600)
+        m = rem // 60
+        return f"{h}h{m:02d}m"
+    except (ValueError, TypeError):
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Render — Top Bar
+# ---------------------------------------------------------------------------
+
 st.markdown(
     f"""
     <div class="top-bar">
       <h1>📈 ibkr_today — {TODAY.isoformat()}</h1>
-      <div class="clock">render {NOW.strftime('%H:%M:%S ET')} · auto-refresh 5s</div>
+      <div class="clock">render {NOW.strftime('%H:%M:%S ET')} · auto-refresh {REFRESH_MS // 1000}s · port 5558</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 
-# ---- Panel 1 — Engine Health Strip ---------------------------------------
+# ---------------------------------------------------------------------------
+# Render — Panel 1 Health (full width above main grid)
+# ---------------------------------------------------------------------------
 
-status_pill_class = (
-    "pill-green" if HEALTH["status"] == "running" else "pill-red" if HEALTH["status"] == "stopped" else "pill-amber"
-)
-health_cols = st.columns([1, 1, 1, 1, 1, 1, 1])
+status_text, pill_class = status_pill_state()
+health_cols = st.columns([1, 1, 1, 1.6, 1, 1, 1])
 
 with health_cols[0]:
+    pid_text = str(HEALTH["pid"]) if HEALTH["pid"] else "—"
     st.markdown(
         f'<div class="metric"><span class="label">PID</span>'
-        f'<span class="value mono">{HEALTH["pid"]}</span></div>',
+        f'<span class="value mono">{pid_text}</span></div>',
         unsafe_allow_html=True,
     )
 with health_cols[1]:
     st.markdown(
         f'<div class="metric"><span class="label">Uptime</span>'
-        f'<span class="value mono">{HEALTH["uptime"]}</span></div>',
+        f'<span class="value mono">{_fmt_uptime(HEALTH["uptime_s"])}</span></div>',
         unsafe_allow_html=True,
     )
 with health_cols[2]:
     st.markdown(
         f'<div class="metric"><span class="label">Status</span>'
-        f'<span class="pill {status_pill_class}">{HEALTH["status"]}</span></div>',
+        f'<span class="pill {pill_class}">{status_text}</span></div>',
         unsafe_allow_html=True,
     )
 with health_cols[3]:
+    last_log_disp = (HEALTH["last_log"] or "(no log)")[:60]
+    age = f'{HEALTH["last_log_age_s"]}s ago' if HEALTH["last_log_age_s"] is not None else "—"
     st.markdown(
         f'<div class="metric"><span class="label">Last log</span>'
-        f'<span class="value mono" style="font-size:13px">{HEALTH["last_log"][:38]}…</span>'
-        f'<span style="font-size:11px;color:#6e7681">{HEALTH["last_log_age_s"]}s ago</span></div>',
+        f'<span class="value mono" style="font-size:13px" title="{HEALTH["last_log"]}">{last_log_disp}…</span>'
+        f'<span style="font-size:11px;color:#6e7681">{age}</span></div>',
         unsafe_allow_html=True,
     )
 with health_cols[4]:
     st.markdown(
         f'<div class="metric"><span class="label">Log size</span>'
-        f'<span class="value">{HEALTH["log_size"]}</span></div>',
+        f'<span class="value">{_fmt_bytes(HEALTH["log_size_b"])}</span></div>',
         unsafe_allow_html=True,
     )
 with health_cols[5]:
@@ -383,22 +796,30 @@ with health_cols[5]:
         unsafe_allow_html=True,
     )
 with health_cols[6]:
+    err_color = "#ff4b4b" if HEALTH["err_count"] > 0 else "#8b949e"
     st.markdown(
         f'<div class="metric"><span class="label">ERROR</span>'
-        f'<span class="value mono" style="color:#ff4b4b">{HEALTH["err_count"]}</span></div>',
+        f'<span class="value mono" style="color:{err_color}">{HEALTH["err_count"]}</span></div>',
         unsafe_allow_html=True,
     )
 
+sub_meta = []
+sub_meta.append(f'DB age: {HEALTH["db_age_s"]}s' if HEALTH["db_age_s"] is not None else 'DB missing')
+sub_meta.append(f'Market: {"OPEN" if MARKET_OPEN is True else "CLOSED" if MARKET_OPEN is False else "?"}')
+if PNL.get("error"):
+    sub_meta.append(f'⚠️ DB: {PNL["error"]}')
 st.markdown(
     f'<div style="font-size:11px;color:#6e7681;margin-top:4px">'
-    f'DB mtime: {HEALTH["db_mtime"].strftime("%H:%M:%S")} · '
-    f'Started: {HEALTH["started_at"].strftime("%H:%M:%S")} · '
-    f'Phase 0 — dummy data</div>',
+    f'{" · ".join(sub_meta)} · '
+    f'Engine: {ENGINE_DIR} · '
+    f'Phase 1 — real data wired</div>',
     unsafe_allow_html=True,
 )
 
 
-# ---- Row 1: P&L (left wide) | Signal Intent (right narrow) --------------
+# ---------------------------------------------------------------------------
+# Render — Row 1: P&L (left wide) | Signal Intent (right narrow)
+# ---------------------------------------------------------------------------
 
 row1_l, row1_r = st.columns([3, 2])
 
@@ -429,179 +850,239 @@ with row1_l:
 
 with row1_r:
     st.markdown('<div class="panel"><h3>Panel 3 — Live Signal Intent</h3>', unsafe_allow_html=True)
-    layer_pill = "pill-blue" if LAYER == "L1" else "pill-amber" if LAYER == "L2" else "pill-green"
-    st.markdown(
-        f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:13px;color:#c9d1d9">'
-        f'<span style="color:#58a6ff">[TICK]</span> '
-        f'<span style="color:#6e7681">{TICK["ts"]}</span><br>'
-        f'SPX=<b>{TICK["spx"]}</b> &nbsp; EM=<b>{TICK["em"]}</b> &nbsp; GEX=<b>{TICK["gex"]}</b><br>'
-        f'regime=<b>{TICK["regime"]}</b> &nbsp; RSI=<b>{TICK["rsi"]}</b><br>'
-        f'GEX_regime=<b>{TICK["gex_regime"]}</b></div>',
-        unsafe_allow_html=True,
-    )
+    tick = SIGNAL_INTENT["tick"]
+    if tick:
+        st.markdown(
+            f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:13px;color:#c9d1d9">'
+            f'<span style="color:#58a6ff">[TICK]</span> '
+            f'<span style="color:#6e7681">{tick["ts"]}</span><br>'
+            f'SPX=<b>{tick["spx"]}</b> &nbsp; EM=<b>{tick["em"]}</b> &nbsp; GEX=<b>{tick["gex"]}</b><br>'
+            f'regime=<b>{tick["regime"]}</b> &nbsp; RSI=<b>{tick["rsi"]}</b><br>'
+            f'GEX_regime=<b>{tick["gex_regime"]}</b></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div style="font-size:12px;color:#8b949e;padding:8px 0">'
+            'no [TICK] in log yet today</div>',
+            unsafe_allow_html=True,
+        )
+
+    layer = SIGNAL_INTENT["entries"][0]["layer"] if SIGNAL_INTENT["entries"] else "?"
+    layer_pill = "pill-blue" if layer == "1" else "pill-amber" if layer == "2" else "pill-green"
     st.markdown(
         f'<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
-        f'<span style="font-size:11px;color:#8b949e;text-transform:uppercase">Layer</span>'
-        f'<span class="pill {layer_pill}">{LAYER}</span>'
-        f'<span style="font-size:11px;color:#6e7681">neutral mean-reversion regime</span>'
+        f'<span style="font-size:11px;color:#8b949e;text-transform:uppercase">Most recent layer</span>'
+        f'<span class="pill {layer_pill}">L{layer}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown(
         '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-top:12px">'
-        'Last 5 [ENTRY] attempts</div>',
+        'Last 5 [ENTRY]</div>',
         unsafe_allow_html=True,
     )
     entry_header = (
         '<div class="entry-row header">'
-        '<div>Pos</div><div>Side·Strike</div><div>Status</div>'
-        '<div>Credit</div><div>Latency</div></div>'
+        '<div>Time</div><div>Side·Strike</div><div>Layer</div>'
+        '<div>Credit</div><div></div></div>'
     )
-    entry_rows = "".join(
-        f'<div class="entry-row">'
-        f'<div>#{e["pos_id"]}</div>'
-        f'<div>{e["side"]} {e["strike"]}</div>'
-        f'<div style="color:{"#00d97e" if e["fill_status"]=="filled" else "#f0a020"}">{e["fill_status"]}</div>'
-        f'<div>${e["credit"]:.2f}</div>'
-        f'<div style="color:#8b949e">{e["fill_latency_s"]}s</div>'
-        f'</div>'
-        for e in RECENT_ENTRIES
-    )
+    if SIGNAL_INTENT["entries"]:
+        entry_rows = "".join(
+            f'<div class="entry-row">'
+            f'<div style="color:#8b949e">{e["ts"].split(" ")[-1] if e["ts"] else ""}</div>'
+            f'<div>{e["side"]} {e["strike"]}</div>'
+            f'<div>L{e["layer"]}</div>'
+            f'<div>${float(e["credit"]):.2f}</div>'
+            f'<div></div>'
+            f'</div>'
+            for e in SIGNAL_INTENT["entries"]
+        )
+    else:
+        entry_rows = '<div style="color:#6e7681;font-size:12px;padding:8px">no [ENTRY] today</div>'
     st.markdown(entry_header + entry_rows, unsafe_allow_html=True)
 
     st.markdown(
         '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-top:12px">'
-        'Skip reasons today</div>',
+        'Skip reasons (log-derived, today)</div>',
         unsafe_allow_html=True,
     )
-    skip_total = sum(SKIP_REASONS.values()) or 1
-    skip_bars = "".join(
-        f'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">'
-        f'<div style="width:160px;color:#c9d1d9">{r}</div>'
-        f'<div style="flex:1;background:#21262d;border-radius:3px;height:11px;overflow:hidden">'
-        f'<div style="width:{100 * v / skip_total:.0f}%;height:100%;background:#ff4b4b;opacity:0.7"></div>'
-        f'</div>'
-        f'<div style="width:36px;text-align:right;color:#8b949e;font-family:SF Mono,Menlo,Consolas,monospace">{v}</div>'
-        f'</div>'
-        for r, v in SKIP_REASONS.items()
-    )
-    st.markdown(skip_bars, unsafe_allow_html=True)
+    if SIGNAL_INTENT["skip_counts"]:
+        max_v = max(SIGNAL_INTENT["skip_counts"].values())
+        skip_bars = "".join(
+            f'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">'
+            f'<div style="width:160px;color:#c9d1d9">{r}</div>'
+            f'<div style="flex:1;background:#21262d;border-radius:3px;height:11px;overflow:hidden">'
+            f'<div style="width:{100 * v / max_v:.0f}%;height:100%;background:#ff4b4b;opacity:0.7"></div>'
+            f'</div>'
+            f'<div style="width:36px;text-align:right;color:#8b949e;font-family:SF Mono,Menlo,Consolas,monospace">{v}</div>'
+            f'</div>'
+            for r, v in SIGNAL_INTENT["skip_counts"].items()
+        )
+        st.markdown(skip_bars, unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="color:#6e7681;font-size:12px;padding:8px">no [SKIP] today</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---- Row 2: Closed Today (left) | Open Pos + Exit Vote + Rejection (right) -
+# ---------------------------------------------------------------------------
+# Render — Row 2: Open Pos (left) | Closed Today (nested under) | Votes + Rejection (right)
+# ---------------------------------------------------------------------------
 
 row2_l, row2_r = st.columns([3, 2])
 
 with row2_l:
-    st.markdown(
-        '<div class="panel"><h3>Panel 4 — Open Positions</h3>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div style="padding:8px 12px;background:#0d1117;border:1px dashed #21262d;border-radius:6px;font-size:12px;color:#8b949e">∅  No open positions — all 5 closed via EOD_EXPIRE at 16:00</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="panel"><h3>Panel 4 — Open Positions</h3>', unsafe_allow_html=True)
+    if OPEN_POS_DF.empty:
+        st.markdown(
+            '<div style="padding:8px 12px;background:#0d1117;border:1px dashed #21262d;border-radius:6px;font-size:12px;color:#8b949e">'
+            '∅  No open positions right now.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "open_time", "layer", "entry_regime", "upnl"]].copy()
+        view_df["strike"] = view_df.apply(
+            lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
+        )
+        view_df["open_time"] = view_df["open_time"].apply(_parse_hhmm)
+        view_df = view_df.rename(columns={
+            "id": "Pos #", "side": "Side", "open_time": "Opened",
+            "layer": "L", "entry_regime": "Regime", "upnl": "uPnL",
+        })
+        view_df = view_df[["Pos #", "Side", "strike", "Opened", "L", "Regime", "uPnL"]]
+        st.dataframe(
+            view_df.style.format({"uPnL": "${:+.2f}"}),
+            width='stretch', hide_index=True, height=108,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Panel 5 — Closed Today (nested under same column body)
+    # Panel 5 — Closed Today
     st.markdown('<div class="panel"><h3>Panel 5 — Closed Today</h3>', unsafe_allow_html=True)
-    closed_df = pd.DataFrame(CLOSED_TODAY)
-    closed_df = closed_df.rename(
-        columns={
-            "pos_id": "Pos #",
-            "side": "Side",
-            "strike": "Strike",
-            "entry_time": "Entry",
-            "exit_time": "Exit",
-            "hold": "Hold",
-            "credit": "Credit",
-            "exit": "Exit $",
-            "pnl": "PnL",
-            "reason": "Reason",
-        }
-    )
-    styled = (
-        closed_df.style.format({"Credit": "${:.2f}", "Exit $": "${:.2f}", "PnL": "${:+.2f}"})
-        .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "", subset=["PnL"])
-    )
-    st.dataframe(styled, width='stretch', hide_index=True, height=108)
+    if CLOSED_DF.empty:
+        st.markdown(
+            '<div class="empty-state"><div class="big">∅</div>'
+            'No closed positions today yet.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        view_df = CLOSED_DF.copy()
+        view_df["strike"] = view_df.apply(
+            lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
+        )
+        view_df["Entry"] = view_df["open_time"].apply(_parse_hhmm)
+        view_df["Exit"] = view_df["close_time"].apply(_parse_hhmm)
+        view_df["Hold"] = view_df.apply(lambda r: _parse_hold(r["open_time"], r["close_time"]), axis=1)
+        view_df["Reason"] = view_df.apply(
+            lambda r: "EOD_EXPIRE" if r["status"] == "expired" else r["exit_regime"].upper()
+                if pd.notna(r.get("exit_regime")) else "—",
+            axis=1,
+        )
+        view_df = view_df.rename(columns={"id": "Pos #", "side": "Side", "credit": "Credit", "pnl": "PnL"})
+        view_df = view_df[["Pos #", "Side", "strike", "Entry", "Exit", "Hold", "Credit", "PnL", "Reason"]]
+        st.dataframe(
+            view_df.style
+            .format({"Credit": "${:.2f}", "PnL": "${:+.2f}"})
+            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "", subset=["PnL"]),
+            width='stretch', hide_index=True, height=108,
+        )
 
-    total_pnl = sum(p["pnl"] for p in CLOSED_TODAY)
-    wins = sum(1 for p in CLOSED_TODAY if p["pnl"] > 0)
-    win_rate = 100 * wins / len(CLOSED_TODAY) if CLOSED_TODAY else 0
-    avg_hold_min = sum(
-        int(p["hold"].replace("h", "").replace("m", "").split("h")[0]) * 60
-        + int(p["hold"].split("h")[1].replace("m", ""))
-        for p in CLOSED_TODAY
-    ) // len(CLOSED_TODAY) if CLOSED_TODAY else 0
+        total_pnl = float(CLOSED_DF["pnl"].sum())
+        wins = int((CLOSED_DF["pnl"] > 0).sum())
+        n = len(CLOSED_DF)
+        win_rate = (100 * wins / n) if n else 0
+        # avg hold via min
+        holds_secs = []
+        for _, r in CLOSED_DF.iterrows():
+            try:
+                o = datetime.fromisoformat(r["open_time"])
+                c = datetime.fromisoformat(r["close_time"])
+                holds_secs.append((c - o).total_seconds())
+            except Exception:
+                pass
+        avg_hold_min = int(sum(holds_secs) / len(holds_secs) / 60) if holds_secs else 0
 
-    st.markdown(
-        f'<div class="table-footer">'
-        f'<div>count <span class="fv">{len(CLOSED_TODAY)}</span></div>'
-        f'<div>total P/L <span class="fv green">${total_pnl:+.2f}</span></div>'
-        f'<div>win rate <span class="fv">{win_rate:.0f}%</span></div>'
-        f'<div>avg hold <span class="fv">{avg_hold_min // 60}h{avg_hold_min % 60:02d}m</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+        pnl_class = "green" if total_pnl > 0 else ""
+        st.markdown(
+            f'<div class="table-footer">'
+            f'<div>count <span class="fv">{n}</span></div>'
+            f'<div>total P/L <span class="fv {pnl_class}">${total_pnl:+.2f}</span></div>'
+            f'<div>win rate <span class="fv">{win_rate:.0f}%</span></div>'
+            f'<div>avg hold <span class="fv">{avg_hold_min // 60}h{avg_hold_min % 60:02d}m</span></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
 with row2_r:
+    # Panel 7 — Exit Vote Tally
     st.markdown('<div class="panel"><h3>Panel 7 — Exit Vote Tally</h3>', unsafe_allow_html=True)
     total_votes = sum(VOTE_TALLY.values()) or 1
-
     v0 = VOTE_TALLY["votes=0 [STAY]"]
     v1 = VOTE_TALLY["votes=1 [STAY]"]
-    v2 = VOTE_TALLY["votes=2 [EXIT]"]
+    v2 = VOTE_TALLY["votes=2+ [EXIT]"]
     p0 = 100 * v0 / total_votes
     p1 = 100 * v1 / total_votes
     p2 = 100 * v2 / total_votes
-    c0_end = p0
-    c1_end = p0 + p1
-    c2_end = p0 + p1 + p2
+    c0_end, c1_end, c2_end = p0, p0 + p1, p0 + p1 + p2
     donut_grad = (
         f"#6e7681 0% {c0_end:.1f}%, "
         f"#58a6ff {c0_end:.1f}% {c1_end:.1f}%, "
         f"#00d97e {c1_end:.1f}% {c2_end:.1f}%"
     )
-
     st.markdown(
         f'<div class="donut-wrap">'
         f'<div class="donut" style="background: conic-gradient({donut_grad})"></div>'
         f'<div class="donut-legend">'
         f'<div class="item"><div class="sw" style="background:#6e7681"></div>votes=0 [STAY] <span style="color:#8b949e;margin-left:auto">{v0}</span></div>'
         f'<div class="item"><div class="sw" style="background:#58a6ff"></div>votes=1 [STAY] <span style="color:#8b949e;margin-left:auto">{v1}</span></div>'
-        f'<div class="item"><div class="sw" style="background:#00d97e"></div>votes=2 [EXIT] <span style="color:#8b949e;margin-left:auto">{v2}</span></div>'
-        f'<div style="margin-top:6px;color:#8b949e;font-size:11px">last 25 [EXIT CHECK] reads</div>'
+        f'<div class="item"><div class="sw" style="background:#00d97e"></div>votes=2+ [EXIT] <span style="color:#8b949e;margin-left:auto">{v2}</span></div>'
+        f'<div style="margin-top:6px;color:#8b949e;font-size:11px">last {EXIT_CHECK_SAMPLE_N} [EXIT CHECK] reads</div>'
         f'</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---- Panel 6 — Rejection Funnel (in right column, under Panel 7)
+    # Panel 6 — Rejection Funnel
     st.markdown('<div class="panel"><h3>Panel 6 — Rejection Funnel</h3>', unsafe_allow_html=True)
-    rej_df = pd.DataFrame(
-        sorted(REJECTION_COUNTS.items(), key=lambda kv: -kv[1]),
-        columns=["reason", "count"],
-    ).set_index("reason")
-    st.bar_chart(rej_df, height=180, width='stretch', color='#ff4b4b')
+    # Prefer log-derived counts (broader), fallback to DB
+    counts = REJECTIONS["log_counts"] or REJECTIONS["db_counts"]
+    if counts:
+        rej_df = pd.DataFrame(
+            sorted(counts.items(), key=lambda kv: -kv[1]),
+            columns=["reason", "count"],
+        ).set_index("reason")
+        st.bar_chart(rej_df, height=180, width='stretch', color='#ff4b4b')
+        src = "log" if REJECTIONS["log_counts"] else "db"
+        st.markdown(
+            f'<div style="font-size:10px;color:#6e7681;margin-top:4px">'
+            f'source: <b>{src}</b>'
+            f'{" · DB-side " + str(len(REJECTIONS["db_counts"])) + " reasons additionally tracked" if REJECTIONS["db_counts"] and REJECTIONS["log_counts"] else ""}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div style="font-size:12px;color:#8b949e;padding:8px 0">'
+            'no rejections today</div>',
+            unsafe_allow_html=True,
+        )
     st.markdown("</div>", unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---- Panel 8 — Engine Decision Stream (compact strip + expander) ----
+# ---------------------------------------------------------------------------
+# Render — Panel 8 Decision Stream
+# ---------------------------------------------------------------------------
 
-if LOG_SAMPLE:
-    last3 = LOG_SAMPLE[-2:]
+if DECISION_STREAM:
+    last3 = DECISION_STREAM[-2:]
     rows_html = "".join(
         f'<div class="log-line {r["level"]}">'
         f'<span class="ts">{r["ts"]}</span> '
         f'<span style="color:#8b949e">[{r["level"]}]</span> '
         f'<span class="tag">[{r["tag"]}]</span> '
-        f'{r["msg"].split(r["tag"] + "] ", 1)[-1][:140]}'
+        f'{r["msg"][:160]}'
         f'</div>'
         for r in last3
     )
@@ -610,7 +1091,7 @@ if LOG_SAMPLE:
         '<h3 style="display:flex;justify-content:space-between;align-items:center">'
         '<span>Panel 8 — Engine Decision Stream</span>'
         f'<span style="font-size:10px;color:#6e7681;text-transform:none;letter-spacing:0">'
-        f'last 3 of {len(LOG_SAMPLE)} lines · from {LOG_PATH.name}'
+        f'last 2 of {len(DECISION_STREAM)} buffered · from {LOG_PATH.name}'
         '</span>'
         '</h3>'
         f'<div style="background:#0d1117;padding:6px 10px;border-radius:6px;'
@@ -618,39 +1099,36 @@ if LOG_SAMPLE:
         '</div>',
         unsafe_allow_html=True,
     )
-    with st.expander(f"View full {len(LOG_SAMPLE)}-line stream", expanded=False):
+    with st.expander(f"View full {len(DECISION_STREAM)}-line stream", expanded=False):
         st.markdown(
             '<div style="background:#0d1117;padding:8px 12px;border-radius:6px;'
-            'border:1px solid #21262d;max-height:300px;overflow-y:auto">',
+            'border:1px solid #21262d;max-height:360px;overflow-y:auto">',
             unsafe_allow_html=True,
         )
-        for row in LOG_SAMPLE:
-            level_cls = row["level"]
+        for row in DECISION_STREAM:
             st.markdown(
-                f'<div class="log-line {level_cls}">'
+                f'<div class="log-line {row["level"]}">'
                 f'<span class="ts">{row["ts"]}</span> '
                 f'<span style="color:#8b949e">[{row["level"]}]</span> '
                 f'<span class="tag">[{row["tag"]}]</span> '
-                f'{row["msg"].split(row["tag"] + "] ", 1)[-1][:160]}'
+                f'{row["msg"][:200]}'
                 f'</div>',
                 unsafe_allow_html=True,
             )
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption(
-            f"Phase 0 sample: last {len(LOG_SAMPLE)} lines from `{LOG_PATH.name}`. "
-            f"Phase 1 will wire a real offset-cached tail reader (5s autorefresh). "
-            f"Tag filter chips (TICK / ENTRY / EXIT / ORDER / WARN / ERROR) deferred to Phase 1."
-        )
 else:
     st.markdown(
         '<div class="panel"><h3>Panel 8 — Engine Decision Stream</h3>'
         f'<div style="font-size:12px;color:#8b949e;padding:8px 0">'
-        f'Log not found at `{LOG_PATH}`. (Read-only — engine log dir preserved as-is.)'
-        '</div></div>',
+        f'Log not found at `{LOG_PATH}` (read-only — engine log dir preserved as-is).</div></div>',
         unsafe_allow_html=True,
     )
 
+# Footer
+err_count_in_footer = sum(1 for line in LOG_LINES if "[ERROR]" in line)
+market_disp_map = {True: "🟢 OPEN", False: "🟡 CLOSED", None: "⚪ ?"}; market_disp = market_disp_map[MARKET_OPEN]
 st.caption(
-    "Phase 0 wireframe · dummy data shaped to 2026-07-07 actual · "
-    "GATE: awaiting Sarthak approval before Phase 1 (real data wiring)."
+    f"Phase 1 · {len(LOG_LINES)} log lines buffered · "
+    f"engine: {status_text} · market: {market_disp} · "
+    f"phase 0 dummy data replaced; all 8 panels live · {err_count_in_footer} log errors today"
 )
