@@ -36,6 +36,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -524,7 +525,18 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Auto-refresh (5s)
 # ---------------------------------------------------------------------------
 
-st_autorefresh(interval=REFRESH_MS, limit=None, key="refresh")
+PAGE_LIVE = "📊 Live Dashboard"
+PAGE_HISTORY = "📈 Trade History"
+
+# The nav widget is rendered further down, but its value is already in
+# session_state on every rerun after the first — read it here so the refresh
+# timer can be gated before any rendering happens.
+ACTIVE_PAGE = st.session_state.get("nav_page") or PAGE_LIVE
+
+# Only poll on the live page. Trade History is historical data that does not
+# change every 5s, and a rerun there would fight the user's scroll position.
+if ACTIVE_PAGE == PAGE_LIVE:
+    st_autorefresh(interval=REFRESH_MS, limit=None, key="refresh")
 
 NOW = datetime.now(ET)
 
@@ -1045,68 +1057,86 @@ def panel8_decision_stream(n: int = DECISION_STREAM_LINES) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def get_historical_pnl_by_day() -> pd.DataFrame:
-    """Get daily P&L summary from all closed positions."""
+    """Per-day rollup of every closed position: P&L, trade count, wins."""
     df, _ = safe_query(
-        "SELECT DATE(close_time) AS date, COUNT(*) AS trades, SUM(pnl) AS daily_pnl, "
-        "       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins, num_contracts "
+        "SELECT DATE(close_time) AS period, COUNT(*) AS trades, "
+        "       SUM(pnl) AS pnl, "
+        "       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins "
         "FROM positions "
-        "WHERE status IN ('closed', 'expired') "
+        "WHERE status IN ('closed', 'expired') AND close_time IS NOT NULL "
         "GROUP BY DATE(close_time) "
-        "ORDER BY date DESC"
+        "ORDER BY period"
     )
     if df is None or df.empty:
         return pd.DataFrame()
-
-    # Convert date string to datetime
-    df["date"] = pd.to_datetime(df["date"])
-    return df.sort_values("date")
+    return df
 
 
 def get_historical_pnl_by_month() -> pd.DataFrame:
-    """Get monthly P&L summary from all closed positions."""
+    """Per-month rollup of every closed position: P&L, trade count, wins."""
     df, _ = safe_query(
-        "SELECT strftime('%Y-%m', close_time) AS month, COUNT(*) AS trades, SUM(pnl) AS monthly_pnl, "
+        "SELECT strftime('%Y-%m', close_time) AS period, COUNT(*) AS trades, "
+        "       SUM(pnl) AS pnl, "
         "       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins "
         "FROM positions "
-        "WHERE status IN ('closed', 'expired') "
+        "WHERE status IN ('closed', 'expired') AND close_time IS NOT NULL "
         "GROUP BY strftime('%Y-%m', close_time) "
-        "ORDER BY month DESC"
+        "ORDER BY period"
     )
     if df is None or df.empty:
         return pd.DataFrame()
-    return df.sort_values("month")
-
-
-def get_contracts_per_day() -> pd.DataFrame:
-    """Get number of contracts per day from closed positions."""
-    df, _ = safe_query(
-        "SELECT DATE(close_time) AS date, SUM(num_contracts) AS total_contracts, COUNT(*) AS trades "
-        "FROM positions "
-        "WHERE status IN ('closed', 'expired') AND num_contracts IS NOT NULL "
-        "GROUP BY DATE(close_time) "
-        "ORDER BY date DESC"
-    )
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    df["date"] = pd.to_datetime(df["date"])
-    return df.sort_values("date")
-
-
-def get_cumulative_pnl() -> pd.DataFrame:
-    """Get cumulative P&L over time."""
-    df, _ = safe_query(
-        "SELECT DATE(close_time) AS date, pnl, close_time "
-        "FROM positions "
-        "WHERE status IN ('closed', 'expired') "
-        "ORDER BY close_time ASC"
-    )
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    df["date"] = pd.to_datetime(df["date"])
-    df["cumulative_pnl"] = df["pnl"].cumsum()
     return df
+
+
+def static_bar(df: pd.DataFrame, x_col: str, y_col: str, x_title: str, y_title: str,
+               color: str = "#00d97e", diverging: bool = False) -> alt.Chart:
+    """Build a non-interactive Altair bar chart (no pan, no zoom, no selection).
+
+    st.bar_chart ships with pan/zoom bound in; constructing the chart directly
+    and never calling .interactive() leaves it static.
+    """
+    y_enc = alt.Y(f"{y_col}:Q", title=y_title,
+                  axis=alt.Axis(grid=True, gridColor="#21262d", gridOpacity=0.6))
+    if diverging:
+        mark_color = alt.condition(
+            alt.datum[y_col] >= 0,
+            alt.value("#00d97e"),
+            alt.value("#ff4b4b"),
+        )
+    else:
+        mark_color = alt.value(color)
+
+    x_enc = alt.X(f"{x_col}:N", title=x_title, axis=alt.Axis(labelAngle=-45, labelLimit=90))
+
+    bars = (
+        alt.Chart(df)
+        .mark_bar(size=14, cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
+        .encode(
+            x=x_enc,
+            y=y_enc,
+            color=mark_color,
+            tooltip=[alt.Tooltip(f"{x_col}:N", title=x_title),
+                     alt.Tooltip(f"{y_col}:Q", title=y_title, format=",.2f")],
+        )
+    )
+
+    # Explicit baseline. The default y-grid line at 0 is the same weight as
+    # every other gridline, so on a diverging chart you cannot see where
+    # profit turns into loss.
+    zero_line = (
+        alt.Chart(pd.DataFrame({"y": [0]}))
+        .mark_rule(color="#8b949e", strokeWidth=2, opacity=0.9)
+        .encode(y=alt.Y("y:Q"))
+    )
+
+    return (
+        alt.layer(zero_line, bars)
+        .properties(height=280)
+        .configure_axis(labelColor="#8b949e", titleColor="#8b949e", domainColor="#21262d",
+                        tickColor="#21262d", labelFontSize=11, titleFontSize=11)
+        .configure_view(strokeWidth=0, fill="transparent")
+        .configure(background="transparent")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1127,8 +1157,6 @@ MARKET_OPEN = market_open_today()
 # Historical data
 DAILY_PNL_DF = get_historical_pnl_by_day()
 MONTHLY_PNL_DF = get_historical_pnl_by_month()
-CONTRACTS_PER_DAY_DF = get_contracts_per_day()
-CUMULATIVE_PNL_DF = get_cumulative_pnl()
 
 
 # ---------------------------------------------------------------------------
@@ -1174,6 +1202,26 @@ def _fmt_bytes(n: int) -> str:
     if n < 1024 * 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n / (1024 * 1024):.1f} MB"
+
+
+def section_header(icon: str, label: str, note: str = "") -> None:
+    """Render a compact section label.
+
+    Deliberately NOT wrapped in `<div class="panel">`: Streamlit closes every
+    st.markdown block's tags, so an opening wrapper div renders as an empty
+    box with the widgets stranded outside it.
+    """
+    note_html = (
+        f'<span style="margin-left:auto;font-size:10px;color:var(--text-muted);'
+        f'letter-spacing:0;text-transform:none">{note}</span>' if note else ""
+    )
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:0.4rem;margin:0.25rem 0 0.4rem;'
+        f'font-size:10px;font-weight:600;color:var(--text-secondary);'
+        f'text-transform:uppercase;letter-spacing:0.12em">'
+        f'<span style="font-size:12px">{icon}</span>{label}{note_html}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _parse_hhmm(iso_ts: str) -> str:
@@ -1222,50 +1270,33 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Create tabs for Live Dashboard and Trade History
-tab1, tab2 = st.tabs(["📊 Live Dashboard", "📈 Trade History"])
+# Page selector. A segmented_control (not st.tabs) because its value lives in
+# session_state and therefore survives the autorefresh rerun — st.tabs would
+# snap back to the first tab every 5 seconds.
+st.segmented_control(
+    "Page", [PAGE_LIVE, PAGE_HISTORY],
+    key="nav_page", default=PAGE_LIVE, label_visibility="collapsed",
+)
+ACTIVE_PAGE = st.session_state.get("nav_page") or PAGE_LIVE
 
 
 # ---------------------------------------------------------------------------
-# Render — Panel 1 Health (full width above main grid)
+# Render — Live Dashboard page
+#
+# Everything below must stay indented inside its page branch — any st.* call
+# left at module level renders on BOTH pages.
 # ---------------------------------------------------------------------------
 
-
-
-# ---------------------------------------------------------------------------
-# Render — Row 1: P&L (left wide) | Signal Intent (right narrow)
-# ---------------------------------------------------------------------------
-
-row1_l, row1_r = st.columns([3, 2])
-
-with tab1:
-    # P&L Summary (full width now that Live Market Data is removed)
-    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">💰</span>P&amp;L Summary</h4>', unsafe_allow_html=True)
+if ACTIVE_PAGE == PAGE_LIVE:
+    section_header("💰", "P&amp;L Summary")
     realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
     unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
 
     total_pnl = PNL["realized"] + PNL["unrealized"]
     total_class = "pos" if total_pnl > 0 else "neg" if total_pnl < 0 else "zero"
 
-    st.markdown(
-        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2rem;align-items:flex-start;margin-bottom:2rem">'
-        f'  <div>'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Realized Today</div>'
-        f'    <div class="big-number {realized_class}">{_fmt_money(PNL["realized"])}</div>'
-        f'  </div>'
-        f'  <div>'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Unrealized</div>'
-        f'    <div class="big-number {unreal_class}">{_fmt_money(PNL["unrealized"])}</div>'
-        f'  </div>'
-        f'  <div style="background:var(--bg-primary);padding:1rem;border-radius:8px;border:1px solid var(--border)">'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Total P&amp;L</div>'
-        f'    <div class="big-number {total_class}" style="font-size:36px">{_fmt_money(total_pnl)}</div>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Filter out signals_today since it's not being tracked properly
+    # Single markdown block: all tags open and close together, so the panel
+    # actually wraps its contents instead of rendering as an empty box.
     counts_to_show = {k: v for k, v in PNL["counts"].items() if k != "signals_today"}
     counts_html = "".join(
         f'<div class="count-cell"><div class="c-label">{k.replace("_", " ")}</div>'
@@ -1273,16 +1304,30 @@ with tab1:
         for k, v in counts_to_show.items()
     )
     st.markdown(
-        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
-        f'<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:1rem;font-weight:600">Today\'s Activity</div>'
-        f'<div class="counts-grid">{counts_html}</div>'
+        f'<div class="panel">'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem;align-items:flex-start">'
+        f'  <div>'
+        f'    <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.25rem;font-weight:600">Realized Today</div>'
+        f'    <div class="big-number {realized_class}">{_fmt_money(PNL["realized"])}</div>'
+        f'  </div>'
+        f'  <div>'
+        f'    <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.25rem;font-weight:600">Unrealized</div>'
+        f'    <div class="big-number {unreal_class}">{_fmt_money(PNL["unrealized"])}</div>'
+        f'  </div>'
+        f'  <div style="background:var(--bg-primary);padding:0.75rem 1rem;border-radius:8px;border:1px solid var(--border)">'
+        f'    <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.25rem;font-weight:600">Total P&amp;L</div>'
+        f'    <div class="big-number {total_class}" style="font-size:34px">{_fmt_money(total_pnl)}</div>'
+        f'  </div>'
+        f'</div>'
+        f'<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">'
+        f'<div style="font-size:10px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.6rem;font-weight:600;letter-spacing:0.12em">Today\'s Activity</div>'
+        f'<div class="counts-grid" style="margin-top:0">{counts_html}</div>'
+        f'</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Open Positions and Closed Today row
-    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">📍</span>Open Positions</h4>', unsafe_allow_html=True)
+    section_header("📍", "Open Positions")
     if OPEN_POS_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1307,10 +1352,8 @@ with tab1:
             view_df.style.format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"}),
             width='stretch', hide_index=True, height=150,
         )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Panel 5 — Closed Today
-    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">✅</span>Closed Today</h4>', unsafe_allow_html=True)
+    section_header("✅", "Closed Today")
     if CLOSED_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1350,108 +1393,70 @@ with tab1:
             f'</div>',
             unsafe_allow_html=True,
         )
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Footer (inside tab1)
-    st.markdown(
-        """
-        <hr style="margin:3rem 0 1rem;border:none;border-top:2px solid var(--border)">
-        """,
-        unsafe_allow_html=True,
+# ---------------------------------------------------------------------------
+# Render — Trade History page
+# ---------------------------------------------------------------------------
+
+else:
+    view_type = st.radio(
+        "Group by", ["Daily", "Monthly"],
+        key="history_view", horizontal=True, label_visibility="collapsed",
     )
 
-with tab2:
-    st.markdown('<h2 style="margin-top:0">Trading History Analytics</h2>', unsafe_allow_html=True)
+    # Both rollups share the same schema (period / trades / pnl / wins), so
+    # every metric below works unchanged for either grouping.
+    hist_df = DAILY_PNL_DF if view_type == "Daily" else MONTHLY_PNL_DF
+    period_label = "Date" if view_type == "Daily" else "Month"
 
-    # Time period selector
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        view_type = st.selectbox("View", ["Daily", "Monthly"], key="history_view")
+    if hist_df.empty:
+        st.markdown(
+            '<div class="empty-state"><div class="big">∅</div>'
+            'No closed trades on record yet.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        total_trades = int(hist_df["trades"].sum())
+        total_pnl = float(hist_df["pnl"].sum())
+        total_wins = int(hist_df["wins"].sum())
+        win_rate = (100 * total_wins / total_trades) if total_trades else 0.0
+        best = hist_df.loc[hist_df["pnl"].idxmax()]
 
-    if view_type == "Daily":
-        if not DAILY_PNL_DF.empty:
-            # Daily P&L Chart
-            st.markdown('<h3 style="margin-top:1.5rem">Daily P&L</h3>', unsafe_allow_html=True)
-            daily_chart_df = DAILY_PNL_DF[["date", "daily_pnl"]].set_index("date")
-            st.bar_chart(daily_chart_df, color="#00d97e")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric(f"Total Trades ({len(hist_df)} {'days' if view_type == 'Daily' else 'months'})", total_trades)
+        m2.metric("Total P&L", f"${total_pnl:+,.2f}")
+        m3.metric("Win Rate", f"{win_rate:.0f}%", f"{total_wins} wins")
+        m4.metric(f"Best {period_label}", f"${float(best['pnl']):+,.2f}", str(best["period"]))
 
-            # Daily Statistics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Trades", int(DAILY_PNL_DF["trades"].sum()))
-            with col2:
-                total_pnl = DAILY_PNL_DF["daily_pnl"].sum()
-                st.metric("Total P&L", f"${total_pnl:+,.2f}")
-            with col3:
-                total_wins = int(DAILY_PNL_DF["wins"].sum())
-                st.metric("Total Wins", total_wins)
-            with col4:
-                win_rate = (total_wins / int(DAILY_PNL_DF["trades"].sum())) * 100 if DAILY_PNL_DF["trades"].sum() > 0 else 0
-                st.metric("Win Rate", f"{win_rate:.0f}%")
+        section_header("📊", f"P&amp;L by {period_label}", "green = profit · red = loss")
+        st.altair_chart(
+            static_bar(hist_df, "period", "pnl", period_label, "P&L ($)", diverging=True),
+            use_container_width=True,
+        )
 
-            # Contracts per day
-            st.markdown('<h3 style="margin-top:1.5rem">Contracts Per Day</h3>', unsafe_allow_html=True)
-            if not CONTRACTS_PER_DAY_DF.empty:
-                contracts_chart_df = CONTRACTS_PER_DAY_DF[["date", "total_contracts"]].set_index("date")
-                st.bar_chart(contracts_chart_df, color="#58a6ff")
-            else:
-                st.info("No contract data available")
+        section_header("🔢", f"Trades per {period_label}")
+        st.altair_chart(
+            static_bar(hist_df, "period", "trades", period_label, "Trades", color="#58a6ff"),
+            use_container_width=True,
+        )
 
-            # Daily summary table
-            st.markdown('<h3 style="margin-top:1.5rem">Daily Summary</h3>', unsafe_allow_html=True)
-            summary_df = DAILY_PNL_DF[["date", "trades", "wins", "daily_pnl"]].copy()
-            summary_df["date"] = summary_df["date"].dt.strftime("%Y-%m-%d")
-            summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
-            summary_df = summary_df.rename(columns={
-                "date": "Date",
-                "trades": "Trades",
-                "wins": "Wins",
-                "daily_pnl": "P&L",
-                "win_rate": "Win %"
-            })
-            st.dataframe(
-                summary_df.style.format({"P&L": "${:+.2f}"}),
-                width='stretch', hide_index=True
-            )
-        else:
-            st.info("No historical data available yet")
-
-    else:  # Monthly view
-        if not MONTHLY_PNL_DF.empty:
-            # Monthly P&L Chart
-            st.markdown('<h3 style="margin-top:1.5rem">Monthly P&L</h3>', unsafe_allow_html=True)
-            monthly_chart_df = MONTHLY_PNL_DF[["month", "monthly_pnl"]].set_index("month")
-            st.bar_chart(monthly_chart_df, color="#00d97e")
-
-            # Monthly Statistics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Trades", int(MONTHLY_PNL_DF["trades"].sum()))
-            with col2:
-                total_pnl = MONTHLY_PNL_DF["monthly_pnl"].sum()
-                st.metric("Total P&L", f"${total_pnl:+,.2f}")
-            with col3:
-                total_wins = int(MONTHLY_PNL_DF["wins"].sum())
-                st.metric("Total Wins", total_wins)
-            with col4:
-                win_rate = (total_wins / int(MONTHLY_PNL_DF["trades"].sum())) * 100 if MONTHLY_PNL_DF["trades"].sum() > 0 else 0
-                st.metric("Win Rate", f"{win_rate:.0f}%")
-
-            # Monthly summary table
-            st.markdown('<h3 style="margin-top:1.5rem">Monthly Summary</h3>', unsafe_allow_html=True)
-            summary_df = MONTHLY_PNL_DF[["month", "trades", "wins", "monthly_pnl"]].copy()
-            summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
-            summary_df = summary_df.rename(columns={
-                "month": "Month",
-                "trades": "Trades",
-                "wins": "Wins",
-                "monthly_pnl": "P&L",
-                "win_rate": "Win %"
-            })
-            st.dataframe(
-                summary_df.style.format({"P&L": "${:+.2f}"}),
-                width='stretch', hide_index=True
-            )
-        else:
-            st.info("No historical data available yet")
+        section_header("📋", f"{period_label} Breakdown")
+        summary_df = hist_df.copy()
+        summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
+        summary_df = summary_df.rename(columns={
+            "period": period_label,
+            "trades": "Trades",
+            "wins": "Wins",
+            "pnl": "P&L",
+            "win_rate": "Win %",
+        })
+        summary_df = summary_df[[period_label, "Trades", "Wins", "Win %", "P&L"]]
+        st.dataframe(
+            summary_df.sort_values(period_label, ascending=False).style
+            .format({"P&L": "${:+.2f}", "Win %": "{:.0f}%"})
+            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0
+                 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "",
+                 subset=["P&L"]),
+            width='stretch', hide_index=True, height=320,
+        )
 
