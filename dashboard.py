@@ -957,15 +957,31 @@ def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
     # Compute uPnL from latest EXIT CHECK per pos
     pos_ids = [int(x) for x in df["id"].tolist()]
     latest_upnl: dict[int, float] = {pid: 0.0 for pid in pos_ids}
+    exit_votes: dict[int, str] = {pid: "—" for pid in pos_ids}
+
     upnl_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?uPnL=\$?(?P<sign>[+\-]?)(?P<val>[\d.]+)")
+    votes_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?votes=(?P<v_n>\d+)/(?P<v_m>\d+)")
+
     for ln in reversed(LOG_LINES):
+        # Get uPnL
         m = upnl_re.search(ln)
         if m:
             pid = int(m.group("pid"))
             if pid in pos_ids and pid in latest_upnl:
                 v = float(m.group("val"))
                 latest_upnl[pid] = v * (1 if m.group("sign") != "-" else -1)
+
+        # Get exit votes (latest only)
+        m_votes = votes_re.search(ln)
+        if m_votes:
+            pid = int(m_votes.group("pid"))
+            if pid in pos_ids and exit_votes[pid] == "—":
+                v_n = m_votes.group("v_n")
+                v_m = m_votes.group("v_m")
+                exit_votes[pid] = f"{v_n}/{v_m}"
+
     df["upnl"] = df["id"].map(lambda p: latest_upnl.get(int(p), 0.0))
+    df["exit_votes"] = df["id"].map(lambda p: exit_votes.get(int(p), "—"))
     return df, err
 
 
@@ -1266,7 +1282,7 @@ with tab1:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Open Positions and Closed Today row
-    st.markdown('<div class="panel"><h3><span class="panel-icon">📍</span>Open Positions</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4 style="margin:0 0 1rem 0;font-size:13px;font-weight:600;color:var(--text-primary);text-transform:uppercase;letter-spacing:0.08em"><span class="panel-icon">📍</span>Open Positions</h4>', unsafe_allow_html=True)
     if OPEN_POS_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1274,7 +1290,7 @@ with tab1:
             unsafe_allow_html=True,
         )
     else:
-        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit", "num_contracts", "upnl"]].copy()
+        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit", "num_contracts", "upnl", "exit_votes"]].copy()
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
@@ -1284,8 +1300,9 @@ with tab1:
             "credit": "Credit Received",
             "num_contracts": "Contracts",
             "upnl": "Unrealized P&L",
+            "exit_votes": "Exit Votes",
         })
-        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "Contracts", "Unrealized P&L"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "Contracts", "Exit Votes", "Unrealized P&L"]]
         st.dataframe(
             view_df.style.format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"}),
             width='stretch', hide_index=True, height=150,
@@ -1293,7 +1310,7 @@ with tab1:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Panel 5 — Closed Today
-    st.markdown('<div class="panel"><h3><span class="panel-icon">✅</span>Closed Today</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4 style="margin:0 0 1rem 0;font-size:13px;font-weight:600;color:var(--text-primary);text-transform:uppercase;letter-spacing:0.08em"><span class="panel-icon">✅</span>Closed Today</h4>', unsafe_allow_html=True)
     if CLOSED_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1438,59 +1455,3 @@ with tab2:
         else:
             st.info("No historical data available yet")
 
-# Footer
-st.markdown(
-    """
-    <hr style="margin:3rem 0 1rem;border:none;border-top:2px solid var(--border)">
-    """,
-    unsafe_allow_html=True,
-)
-
-err_count_in_footer = sum(1 for line in LOG_LINES if "[ERROR]" in line)
-market_disp_map = {True: "🟢 OPEN", False: "🔴 CLOSED", None: "⚪ UNKNOWN"}
-market_disp = market_disp_map[MARKET_OPEN]
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.markdown(
-        f"""
-        <div style="font-size:12px;color:var(--text-secondary)">
-            <div><b style="color:var(--text-primary)">Engine Status</b></div>
-            <div>{status_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col2:
-    st.markdown(
-        f"""
-        <div style="font-size:12px;color:var(--text-secondary)">
-            <div><b style="color:var(--text-primary)">Market Status</b></div>
-            <div>{market_disp}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with col3:
-    st.markdown(
-        f"""
-        <div style="font-size:12px;color:var(--text-secondary)">
-            <div><b style="color:var(--text-primary)">Statistics</b></div>
-            <div>{len(LOG_LINES)} log lines · {err_count_in_footer} errors</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.markdown(
-    f"""
-    <div style="margin-top:2rem;padding-top:1rem;border-top:1px solid var(--border);text-align:center;font-size:11px;color:var(--text-muted)">
-        <div>IBKR Today Dashboard — Phase 1 (Real Data)</div>
-        <div style="margin-top:0.5rem">Engine: {ENGINE_DIR}</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
