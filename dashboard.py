@@ -1265,51 +1265,6 @@ with tab1:
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Now continue with the rest of the dashboard
-    row2_l, row2_r = st.columns([3, 2])
-
-with row2_l:
-    st.markdown('<div class="panel"><h3><span class="panel-icon">💰</span>P&amp;L Summary</h3>', unsafe_allow_html=True)
-    realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
-    unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
-
-    total_pnl = PNL["realized"] + PNL["unrealized"]
-    total_class = "pos" if total_pnl > 0 else "neg" if total_pnl < 0 else "zero"
-
-    st.markdown(
-        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2rem;align-items:flex-start;margin-bottom:2rem">'
-        f'  <div>'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Realized Today</div>'
-        f'    <div class="big-number {realized_class}">{_fmt_money(PNL["realized"])}</div>'
-        f'  </div>'
-        f'  <div>'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Unrealized</div>'
-        f'    <div class="big-number {unreal_class}">{_fmt_money(PNL["unrealized"])}</div>'
-        f'  </div>'
-        f'  <div style="background:var(--bg-primary);padding:1rem;border-radius:8px;border:1px solid var(--border)">'
-        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Total P&amp;L</div>'
-        f'    <div class="big-number {total_class}" style="font-size:36px">{_fmt_money(total_pnl)}</div>'
-        f'  </div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Filter out signals_today since it's not being tracked properly
-    counts_to_show = {k: v for k, v in PNL["counts"].items() if k != "signals_today"}
-    counts_html = "".join(
-        f'<div class="count-cell"><div class="c-label">{k.replace("_", " ")}</div>'
-        f'<div class="c-value">{v}</div></div>'
-        for k, v in counts_to_show.items()
-    )
-    st.markdown(
-        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
-        f'<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:1rem;font-weight:600">Today\'s Activity</div>'
-        f'<div class="counts-grid">{counts_html}</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
     # Open Positions and Closed Today row
     st.markdown('<div class="panel"><h3><span class="panel-icon">📍</span>Open Positions</h3>', unsafe_allow_html=True)
     if OPEN_POS_DF.empty:
@@ -1429,61 +1384,6 @@ with row2_r:
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ---------------------------------------------------------------------------
-# Render — Panel 8 Decision Stream
-# ---------------------------------------------------------------------------
-
-if DECISION_STREAM:
-    last3 = DECISION_STREAM[-2:]
-    rows_html = "".join(
-        f'<div class="log-line {r["level"]}">'
-        f'<span class="ts">{r["ts"]}</span> '
-        f'<span style="color:var(--text-secondary)">[{r["level"]}]</span> '
-        f'<span class="tag">[{r["tag"]}]</span> '
-        f'{r["msg"][:160]}'
-        f'</div>'
-        for r in last3
-    )
-    st.markdown(
-        '<div class="panel">'
-        '<h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'
-        '<span><span class="panel-icon">📡</span>Decision Stream</span>'
-        f'<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500">'
-        f'last 2 of {len(DECISION_STREAM)} · {LOG_PATH.name}'
-        '</span>'
-        '</h3>'
-        f'<div style="background:var(--bg-primary);padding:10px;border-radius:6px;'
-        f'border:1px solid var(--border);max-height:200px;overflow-y:auto">{rows_html}</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    with st.expander(f"📜 View full {len(DECISION_STREAM)}-line stream", expanded=False):
-        st.markdown(
-            '<div style="background:var(--bg-primary);padding:12px;border-radius:6px;'
-            'border:1px solid var(--border);max-height:400px;overflow-y:auto">',
-            unsafe_allow_html=True,
-        )
-        for row in DECISION_STREAM:
-            st.markdown(
-                f'<div class="log-line {row["level"]}">'
-                f'<span class="ts">{row["ts"]}</span> '
-                f'<span style="color:var(--text-secondary)">[{row["level"]}]</span> '
-                f'<span class="tag">[{row["tag"]}]</span> '
-                f'{row["msg"][:200]}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-else:
-    st.markdown(
-        '<div class="panel"><h3><span class="panel-icon">📡</span>Decision Stream</h3>'
-        f'<div class="empty-state"><div class="big">📭</div>'
-        f'Log not found at<br><code style="font-size:11px">{LOG_PATH}</code>'
-        f'<div style="font-size:11px;margin-top:0.5rem">Engine may not be running or logs directory is missing.</div></div></div>',
-        unsafe_allow_html=True,
-    )
 
     # Footer (inside tab1)
     st.markdown(
