@@ -1318,18 +1318,13 @@ with row2_l:
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
-        view_df["Exit Reason"] = view_df.apply(
-            lambda r: "EOD_EXPIRE" if r["status"] == "expired" else r["exit_regime"].upper()
-                if pd.notna(r.get("exit_regime")) else "—",
-            axis=1,
-        )
         view_df = view_df.rename(columns={
             "id": "Pos #",
             "side": "Side",
             "credit": "Credit Received",
             "pnl": "P&L"
         })
-        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "P&L", "Exit Reason"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "P&L"]]
         st.dataframe(
             view_df.style
             .format({"Credit Received": "${:.2f}", "P&L": "${:+.2f}"})
