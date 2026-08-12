@@ -105,66 +105,415 @@ st.set_page_config(
 
 CUSTOM_CSS = """
 <style>
-  .stApp { background-color: #0e1117; }
-  section.main > div { padding-top: 1rem; }
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --border: #21262d;
+    --accent-green: #00d97e;
+    --accent-red: #ff4b4b;
+    --accent-blue: #58a6ff;
+    --accent-amber: #f0a020;
+  }
 
-  .panel { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-  .panel h3 { margin: 0 0 10px 0; font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+  * { box-sizing: border-box; }
 
-  .metric-row { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
-  .metric { display: flex; flex-direction: column; gap: 2px; }
-  .metric .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
-  .metric .value { font-size: 18px; color: #e6edf3; font-weight: 600; }
-  .metric .value.mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; }
+  .stApp {
+    background-color: var(--bg-primary);
+  }
 
-  .pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
-  .pill-green { background: #0d4429; color: #00d97e; border: 1px solid #00d97e; }
-  .pill-red { background: #4d1417; color: #ff4b4b; border: 1px solid #ff4b4b; }
-  .pill-amber { background: #4d3a14; color: #f0a020; border: 1px solid #f0a020; }
-  .pill-blue { background: #14294d; color: #58a6ff; border: 1px solid #58a6ff; }
-  .pill-grey { background: #21262d; color: #8b949e; border: 1px solid #6e7681; }
+  section.main > div {
+    padding: 1.5rem 1.2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
 
-  .big-number { font-size: 40px; font-weight: 700; line-height: 1; margin: 4px 0; font-feature-settings: 'tnum'; }
-  .big-number.pos { color: #00d97e; }
-  .big-number.neg { color: #ff4b4b; }
-  .big-number.zero { color: #8b949e; }
+  /* Header section */
+  .dashboard-header {
+    margin-bottom: 2rem;
+    border-bottom: 2px solid var(--bg-tertiary);
+    padding-bottom: 1.5rem;
+  }
 
-  .counts-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
-  .count-cell { background: #0d1117; padding: 4px 8px; border-radius: 6px; text-align: center; }
-  .count-cell .c-label { font-size: 9px; color: #8b949e; text-transform: uppercase; }
-  .count-cell .c-value { font-size: 18px; font-weight: 600; color: #e6edf3; margin-top: 1px; }
+  .dashboard-header h1 {
+    margin: 0 0 0.5rem 0;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
+  }
 
-  .log-line { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; padding: 2px 6px; color: #c9d1d9; }
-  .log-line.INFO { color: #c9d1d9; }
-  .log-line.WARNING { color: #f0a020; }
-  .log-line.ERROR { color: #ff4b4b; }
-  .log-line .tag { color: #58a6ff; font-weight: 600; }
-  .log-line .ts { color: #6e7681; }
+  .header-meta {
+    display: flex;
+    gap: 2rem;
+    font-size: 13px;
+    color: var(--text-muted);
+    font-family: 'SF Mono', monospace;
+    flex-wrap: wrap;
+  }
 
-  .stDataFrame { font-size: 12px; }
+  .header-meta > div {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
 
-  .donut-wrap { display: flex; align-items: center; gap: 16px; }
-  .donut { width: 110px; height: 110px; border-radius: 50%; position: relative; flex-shrink: 0; }
-  .donut::after { content: ''; position: absolute; inset: 18px; border-radius: 50%; background: #161b22; }
-  .donut-legend { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
-  .donut-legend .item { display: flex; align-items: center; gap: 6px; }
-  .donut-legend .sw { width: 10px; height: 10px; border-radius: 2px; }
+  /* Panels */
+  .panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  }
 
-  .table-footer { display: flex; gap: 24px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d; font-size: 13px; color: #8b949e; }
-  .table-footer .fv { color: #e6edf3; font-weight: 600; }
-  .table-footer .fv.green { color: #00d97e; }
+  .panel h3 {
+    margin: 0 0 1.5rem 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
 
-  .empty-state { text-align: center; padding: 24px 16px; color: #6e7681; border: 1px dashed #21262d; border-radius: 6px; background: #0d1117; }
-  .empty-state .big { font-size: 28px; margin-bottom: 6px; color: #8b949e; }
+  .panel-icon {
+    font-size: 16px;
+  }
 
-  .entry-row { display: grid; grid-template-columns: 60px 140px 1fr 80px 70px; gap: 10px; padding: 3px 8px; font-size: 12px; font-family: 'SF Mono', Menlo, Consolas, monospace; border-bottom: 1px solid #21262d; }
-  .entry-row.header { color: #8b949e; font-family: inherit; text-transform: uppercase; font-size: 10px; }
-  .entry-row .pnl.pos { color: #00d97e; }
-  .entry-row .pnl.neg { color: #ff4b4b; }
+  /* Metrics */
+  .metric-row {
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
 
-  .top-bar { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
-  .top-bar h1 { margin: 0; font-size: 18px; color: #e6edf3; }
-  .top-bar .clock { font-family: 'SF Mono', Menlo, Consolas, monospace; color: #8b949e; font-size: 13px; }
+  .metric {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .metric .label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+
+  .metric .value {
+    font-size: 24px;
+    color: var(--text-primary);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+
+  .metric .value.mono {
+    font-family: 'SF Mono', monospace;
+    font-size: 16px;
+  }
+
+  /* Status pills */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    gap: 0.5rem;
+  }
+
+  .pill-green {
+    background: rgba(0, 217, 126, 0.1);
+    color: var(--accent-green);
+    border: 1px solid rgba(0, 217, 126, 0.3);
+  }
+
+  .pill-red {
+    background: rgba(255, 75, 75, 0.1);
+    color: var(--accent-red);
+    border: 1px solid rgba(255, 75, 75, 0.3);
+  }
+
+  .pill-amber {
+    background: rgba(240, 160, 32, 0.1);
+    color: var(--accent-amber);
+    border: 1px solid rgba(240, 160, 32, 0.3);
+  }
+
+  .pill-blue {
+    background: rgba(88, 166, 255, 0.1);
+    color: var(--accent-blue);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+  }
+
+  .pill-grey {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid rgba(139, 148, 158, 0.2);
+  }
+
+  /* Big numbers */
+  .big-number {
+    font-size: 48px;
+    font-weight: 700;
+    line-height: 1.1;
+    margin: 0.5rem 0;
+    font-feature-settings: 'tnum';
+    letter-spacing: -1px;
+  }
+
+  .big-number.pos {
+    color: var(--accent-green);
+  }
+
+  .big-number.neg {
+    color: var(--accent-red);
+  }
+
+  .big-number.zero {
+    color: var(--text-secondary);
+  }
+
+  /* Counts grid */
+  .counts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 12px;
+    margin-top: 1.5rem;
+  }
+
+  .count-cell {
+    background: var(--bg-primary);
+    padding: 12px;
+    border-radius: 8px;
+    text-align: center;
+    border: 1px solid var(--border);
+    transition: all 0.2s ease;
+  }
+
+  .count-cell:hover {
+    border-color: var(--text-secondary);
+  }
+
+  .count-cell .c-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+
+  .count-cell .c-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  /* Logs */
+  .log-line {
+    font-family: 'SF Mono', monospace;
+    font-size: 13px;
+    padding: 8px 10px;
+    color: var(--text-primary);
+    line-height: 1.5;
+    border-bottom: 1px solid rgba(33, 38, 45, 0.5);
+  }
+
+  .log-line.INFO {
+    color: var(--text-primary);
+  }
+
+  .log-line.WARNING {
+    color: var(--accent-amber);
+    background: rgba(240, 160, 32, 0.05);
+  }
+
+  .log-line.ERROR {
+    color: var(--accent-red);
+    background: rgba(255, 75, 75, 0.05);
+  }
+
+  .log-line .tag {
+    color: var(--accent-blue);
+    font-weight: 600;
+  }
+
+  .log-line .ts {
+    color: var(--text-muted);
+  }
+
+  /* Tables */
+  .stDataFrame {
+    font-size: 13px;
+  }
+
+  .stDataFrame th {
+    background-color: var(--bg-tertiary) !important;
+    color: var(--text-secondary) !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    font-size: 11px !important;
+  }
+
+  .stDataFrame td {
+    padding: 10px 12px !important;
+    border-bottom: 1px solid var(--border) !important;
+  }
+
+  /* Charts */
+  .donut-wrap {
+    display: flex;
+    align-items: center;
+    gap: 2rem;
+    padding: 1rem 0;
+  }
+
+  .donut {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .donut::after {
+    content: '';
+    position: absolute;
+    inset: 28px;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+  }
+
+  .donut-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    font-size: 13px;
+  }
+
+  .donut-legend .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .donut-legend .sw {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* Table footer */
+  .table-footer {
+    display: flex;
+    gap: 2rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+  }
+
+  .table-footer .fv {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: 'SF Mono', monospace;
+  }
+
+  .table-footer .fv.green {
+    color: var(--accent-green);
+  }
+
+  /* Empty states */
+  .empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-muted);
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: var(--bg-primary);
+  }
+
+  .empty-state .big {
+    font-size: 32px;
+    margin-bottom: 0.5rem;
+    color: var(--text-secondary);
+  }
+
+  /* Entry rows */
+  .entry-row {
+    display: grid;
+    grid-template-columns: 70px 150px 1fr 90px 80px;
+    gap: 12px;
+    padding: 10px;
+    font-size: 13px;
+    font-family: 'SF Mono', monospace;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+
+  .entry-row.header {
+    color: var(--text-secondary);
+    font-family: inherit;
+    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: var(--bg-tertiary);
+    padding: 8px 10px;
+  }
+
+  .entry-row .pnl.pos {
+    color: var(--accent-green);
+    font-weight: 600;
+  }
+
+  .entry-row .pnl.neg {
+    color: var(--accent-red);
+    font-weight: 600;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    section.main > div {
+      padding: 1rem;
+    }
+
+    .metric-row {
+      gap: 1rem;
+    }
+
+    .counts-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .entry-row {
+      grid-template-columns: 1fr;
+      gap: 4px;
+      padding: 8px;
+    }
+
+    .entry-row > div {
+      display: flex;
+      justify-content: space-between;
+    }
+  }
 </style>
 """
 
@@ -765,14 +1114,19 @@ def _parse_hold(open_iso: str, close_iso: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Render — Top Bar
+# Render — Header
 # ---------------------------------------------------------------------------
 
 st.markdown(
     f"""
-    <div class="top-bar">
-      <h1>📈 ibkr_today — {TODAY.isoformat()}</h1>
-      <div class="clock">render {NOW.strftime('%H:%M:%S ET')} · auto-refresh {REFRESH_MS // 1000}s · port 5558</div>
+    <div class="dashboard-header">
+      <h1>📈 IBKR Trading Dashboard</h1>
+      <div class="header-meta">
+        <div><span style="color:var(--text-secondary)">Date:</span> {TODAY.isoformat()}</div>
+        <div><span style="color:var(--text-secondary)">Time:</span> {NOW.strftime('%H:%M:%S')} ET</div>
+        <div><span style="color:var(--text-secondary)">Refresh:</span> every {REFRESH_MS // 1000}s</div>
+        <div><span style="color:var(--text-secondary)">Port:</span> 5558</div>
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -784,68 +1138,89 @@ st.markdown(
 # ---------------------------------------------------------------------------
 
 status_text, pill_class = status_pill_state()
-health_cols = st.columns([1, 1, 1, 1.6, 1, 1, 1])
+
+# Health Status Row
+st.markdown('<div class="panel" style="margin-bottom:2rem">', unsafe_allow_html=True)
+st.markdown('<h3 style="margin-top:0"><span class="panel-icon">🏥</span>Engine Health Status</h3>', unsafe_allow_html=True)
+
+health_cols = st.columns([1, 1, 1, 1.5, 1.2, 1, 1])
 
 with health_cols[0]:
     pid_text = str(HEALTH["pid"]) if HEALTH["pid"] else "—"
     st.markdown(
-        f'<div class="metric"><span class="label">PID</span>'
+        f'<div class="metric"><span class="label">Process ID</span>'
         f'<span class="value mono">{pid_text}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[1]:
     st.markdown(
         f'<div class="metric"><span class="label">Uptime</span>'
         f'<span class="value mono">{_fmt_uptime(HEALTH["uptime_s"])}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[2]:
     st.markdown(
         f'<div class="metric"><span class="label">Status</span>'
-        f'<span class="pill {pill_class}">{status_text}</span></div>',
+        f'<span class="pill {pill_class}">● {status_text}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[3]:
-    last_log_disp = (HEALTH["last_log"] or "(no log)")[:60]
-    age = f'{HEALTH["last_log_age_s"]}s ago' if HEALTH["last_log_age_s"] is not None else "—"
+    market_status = "🟢 OPEN" if MARKET_OPEN is True else "🔴 CLOSED" if MARKET_OPEN is False else "⚪ UNKNOWN"
     st.markdown(
-        f'<div class="metric"><span class="label">Last log</span>'
-        f'<span class="value mono" style="font-size:13px" title="{HEALTH["last_log"]}">{last_log_disp}…</span>'
-        f'<span style="font-size:11px;color:#6e7681">{age}</span></div>',
+        f'<div class="metric"><span class="label">Market</span>'
+        f'<span class="value" style="font-size:16px">{market_status}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[4]:
     st.markdown(
-        f'<div class="metric"><span class="label">Log size</span>'
-        f'<span class="value">{_fmt_bytes(HEALTH["log_size_b"])}</span></div>',
+        f'<div class="metric"><span class="label">Log Size</span>'
+        f'<span class="value mono">{_fmt_bytes(HEALTH["log_size_b"])}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[5]:
+    warn_color = "var(--accent-amber)" if HEALTH["warn_count"] > 0 else "var(--text-secondary)"
     st.markdown(
-        f'<div class="metric"><span class="label">WARN</span>'
-        f'<span class="value mono" style="color:#f0a020">{HEALTH["warn_count"]}</span></div>',
+        f'<div class="metric"><span class="label">⚠️ Warnings</span>'
+        f'<span class="value mono" style="color:{warn_color}">{HEALTH["warn_count"]}</span></div>',
         unsafe_allow_html=True,
     )
+
 with health_cols[6]:
-    err_color = "#ff4b4b" if HEALTH["err_count"] > 0 else "#8b949e"
+    err_color = "var(--accent-red)" if HEALTH["err_count"] > 0 else "var(--text-secondary)"
     st.markdown(
-        f'<div class="metric"><span class="label">ERROR</span>'
+        f'<div class="metric"><span class="label">🔴 Errors</span>'
         f'<span class="value mono" style="color:{err_color}">{HEALTH["err_count"]}</span></div>',
         unsafe_allow_html=True,
     )
 
-sub_meta = []
-sub_meta.append(f'DB age: {HEALTH["db_age_s"]}s' if HEALTH["db_age_s"] is not None else 'DB missing')
-sub_meta.append(f'Market: {"OPEN" if MARKET_OPEN is True else "CLOSED" if MARKET_OPEN is False else "?"}')
-if PNL.get("error"):
-    sub_meta.append(f'⚠️ DB: {PNL["error"]}')
+# Last activity
+last_log_disp = (HEALTH["last_log"] or "(no activity yet)")[:80]
+age = f'{HEALTH["last_log_age_s"]}s ago' if HEALTH["last_log_age_s"] is not None else "—"
+db_age = f'DB: {HEALTH["db_age_s"]}s old' if HEALTH["db_age_s"] is not None else 'DB: missing'
+
 st.markdown(
-    f'<div style="font-size:11px;color:#6e7681;margin-top:4px">'
-    f'{" · ".join(sub_meta)} · '
-    f'Engine: {ENGINE_DIR} · '
-    f'Phase 1 — real data wired</div>',
+    f'<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted)">'
+    f'<div style="margin-bottom:0.5rem"><b>Last Activity:</b> {age}</div>'
+    f'<div style="word-break:break-all;font-family:SF Mono,monospace;color:var(--text-primary);margin-bottom:0.5rem">{last_log_disp}</div>'
+    f'<div>{db_age}</div>'
+    f'</div>',
     unsafe_allow_html=True,
 )
+
+if PNL.get("error"):
+    st.markdown(
+        f'<div style="margin-top:1rem;padding:0.75rem;background:rgba(255,75,75,0.05);border:1px solid rgba(255,75,75,0.2);border-radius:6px;color:var(--accent-red);font-size:12px">'
+        f'<b>⚠️ Database Error:</b> {PNL["error"]}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -855,105 +1230,127 @@ st.markdown(
 row1_l, row1_r = st.columns([3, 2])
 
 with row1_l:
-    st.markdown('<div class="panel"><h3>Panel 2 — P&amp;L Summary</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">💰</span>P&amp;L Summary</h3>', unsafe_allow_html=True)
     realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
     unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
+
+    total_pnl = PNL["realized"] + PNL["unrealized"]
+    total_class = "pos" if total_pnl > 0 else "neg" if total_pnl < 0 else "zero"
+
     st.markdown(
-        f'<div style="display:flex;gap:24px;align-items:flex-end">'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2rem;align-items:flex-start;margin-bottom:2rem">'
         f'  <div>'
-        f'    <div style="font-size:11px;color:#8b949e;text-transform:uppercase">Realized today</div>'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Realized Today</div>'
         f'    <div class="big-number {realized_class}">{_fmt_money(PNL["realized"])}</div>'
         f'  </div>'
-        f'  <div style="margin-bottom:4px">'
-        f'    <div style="font-size:11px;color:#8b949e;text-transform:uppercase">Unrealized</div>'
-        f'    <div class="big-number {unreal_class}" style="font-size:32px">{_fmt_money(PNL["unrealized"])}</div>'
+        f'  <div>'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Unrealized</div>'
+        f'    <div class="big-number {unreal_class}">{_fmt_money(PNL["unrealized"])}</div>'
+        f'  </div>'
+        f'  <div style="background:var(--bg-primary);padding:1rem;border-radius:8px;border:1px solid var(--border)">'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Total P&amp;L</div>'
+        f'    <div class="big-number {total_class}" style="font-size:36px">{_fmt_money(total_pnl)}</div>'
         f'  </div>'
         f'</div>',
         unsafe_allow_html=True,
     )
+
     counts_html = "".join(
-        f'<div class="count-cell"><div class="c-label">{k}</div>'
+        f'<div class="count-cell"><div class="c-label">{k.replace("_", " ")}</div>'
         f'<div class="c-value">{v}</div></div>'
         for k, v in PNL["counts"].items()
     )
-    st.markdown(f'<div class="counts-grid">{counts_html}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
+        f'<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:1rem;font-weight:600">Today\'s Activity</div>'
+        f'<div class="counts-grid">{counts_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
 with row1_r:
-    st.markdown('<div class="panel"><h3>Panel 3 — Live Signal Intent</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">📊</span>Live Market Data</h3>', unsafe_allow_html=True)
     tick = SIGNAL_INTENT["tick"]
     if tick:
         st.markdown(
-            f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:13px;color:#c9d1d9">'
-            f'<span style="color:#58a6ff">[TICK]</span> '
-            f'<span style="color:#6e7681">{tick["ts"]}</span><br>'
-            f'SPX=<b>{tick["spx"]}</b> &nbsp; EM=<b>{tick["em"]}</b> &nbsp; GEX=<b>{tick["gex"]}</b><br>'
-            f'regime=<b>{tick["regime"]}</b> &nbsp; RSI=<b>{tick["rsi"]}</b><br>'
-            f'GEX_regime=<b>{tick["gex_regime"]}</b></div>',
+            f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:14px;line-height:1.8">'
+            f'<div style="display:flex;gap:2rem;margin-bottom:1rem;flex-wrap:wrap">'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">SPX</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["spx"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">EM</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["em"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">GEX</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["gex"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">RSI</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["rsi"]}</span></div>'
+            f'</div>'
+            f'<div style="padding-top:1rem;border-top:1px solid var(--border);font-size:12px">'
+            f'  <div><span style="color:var(--text-secondary)">Regime:</span> <span style="color:var(--accent-blue);font-weight:600">{tick["regime"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary)">GEX Regime:</span> <span style="color:var(--accent-blue);font-weight:600">{tick["gex_regime"]}</span></div>'
+            f'  <div style="margin-top:0.5rem;color:var(--text-muted);font-size:11px">Last update: {tick["ts"]}</div>'
+            f'</div></div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            '<div style="font-size:12px;color:#8b949e;padding:8px 0">'
-            'no [TICK] in log yet today</div>',
+            '<div class="empty-state"><div class="big">📡</div>'
+            'Waiting for market data...</div>',
             unsafe_allow_html=True,
         )
 
     layer = SIGNAL_INTENT["entries"][0]["layer"] if SIGNAL_INTENT["entries"] else "?"
     layer_pill = "pill-blue" if layer == "1" else "pill-amber" if layer == "2" else "pill-green"
+
     st.markdown(
-        f'<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
-        f'<span style="font-size:11px;color:#8b949e;text-transform:uppercase">Most recent layer</span>'
+        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
+        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">'
+        f'<div><span style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600">Current Layer</span></div>'
         f'<span class="pill {layer_pill}">L{layer}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
+    # Recent entries
     st.markdown(
-        '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-top:12px">'
-        'Last 5 [ENTRY]</div>',
+        '<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.75rem;font-weight:600">'
+        f'Recent Entries ({len(SIGNAL_INTENT["entries"])})</div>',
         unsafe_allow_html=True,
     )
-    entry_header = (
-        '<div class="entry-row header">'
-        '<div>Time</div><div>Side·Strike</div><div>Layer</div>'
-        '<div>Credit</div><div></div></div>'
-    )
+
     if SIGNAL_INTENT["entries"]:
         entry_rows = "".join(
-            f'<div class="entry-row">'
-            f'<div style="color:#8b949e">{e["ts"].split(" ")[-1] if e["ts"] else ""}</div>'
-            f'<div>{e["side"]} {e["strike"]}</div>'
-            f'<div>L{e["layer"]}</div>'
-            f'<div>${float(e["credit"]):.2f}</div>'
-            f'<div></div>'
+            f'<div style="display:grid;grid-template-columns:50px 80px 60px 80px;gap:1rem;padding:8px;border-bottom:1px solid var(--border);align-items:center;font-size:12px">'
+            f'  <div><span style="color:var(--text-muted)">●</span> {e["ts"].split(" ")[-1] if e["ts"] else ""}</div>'
+            f'  <div><span style="color:var(--accent-green);font-weight:600">{e["side"]}</span></div>'
+            f'  <div style="font-family:SF Mono,monospace;color:var(--text-primary)">{e["strike"]}</div>'
+            f'  <div style="font-weight:600;color:var(--text-primary)">${float(e["credit"]):.2f}</div>'
             f'</div>'
             for e in SIGNAL_INTENT["entries"]
         )
+        st.markdown(entry_rows, unsafe_allow_html=True)
     else:
-        entry_rows = '<div style="color:#6e7681;font-size:12px;padding:8px">no [ENTRY] today</div>'
-    st.markdown(entry_header + entry_rows, unsafe_allow_html=True)
+        st.markdown('<div style="color:var(--text-muted);font-size:12px;padding:0.75rem">No entries today yet</div>', unsafe_allow_html=True)
 
+    # Skip reasons
     st.markdown(
-        '<div style="font-size:11px;color:#8b949e;text-transform:uppercase;margin-top:12px">'
-        'Skip reasons (log-derived, today)</div>',
+        '<div style="margin-top:1rem;font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600;margin-bottom:0.75rem">'
+        'Rejection Reasons</div>',
         unsafe_allow_html=True,
     )
+
     if SIGNAL_INTENT["skip_counts"]:
         max_v = max(SIGNAL_INTENT["skip_counts"].values())
         skip_bars = "".join(
-            f'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">'
-            f'<div style="width:160px;color:#c9d1d9">{r}</div>'
-            f'<div style="flex:1;background:#21262d;border-radius:3px;height:11px;overflow:hidden">'
-            f'<div style="width:{100 * v / max_v:.0f}%;height:100%;background:#ff4b4b;opacity:0.7"></div>'
+            f'<div style="display:flex;align-items:center;gap:0.75rem;font-size:12px;margin-bottom:0.75rem">'
+            f'<div style="width:140px;color:var(--text-primary);word-break:break-word">{r}</div>'
+            f'<div style="flex:1;background:var(--border);border-radius:4px;height:16px;overflow:hidden">'
+            f'<div style="width:{100 * v / max_v:.0f}%;height:100%;background:var(--accent-red);opacity:0.7"></div>'
             f'</div>'
-            f'<div style="width:36px;text-align:right;color:#8b949e;font-family:SF Mono,Menlo,Consolas,monospace">{v}</div>'
+            f'<div style="width:32px;text-align:right;color:var(--text-secondary);font-family:SF Mono,monospace;font-weight:600">{v}</div>'
             f'</div>'
             for r, v in SIGNAL_INTENT["skip_counts"].items()
         )
         st.markdown(skip_bars, unsafe_allow_html=True)
     else:
-        st.markdown('<div style="color:#6e7681;font-size:12px;padding:8px">no [SKIP] today</div>', unsafe_allow_html=True)
+        st.markdown('<div style="color:var(--text-muted);font-size:12px;padding:0.75rem">No rejections today</div>', unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -964,11 +1361,11 @@ with row1_r:
 row2_l, row2_r = st.columns([3, 2])
 
 with row2_l:
-    st.markdown('<div class="panel"><h3>Panel 4 — Open Positions</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">📍</span>Open Positions</h3>', unsafe_allow_html=True)
     if OPEN_POS_DF.empty:
         st.markdown(
-            '<div style="padding:8px 12px;background:#0d1117;border:1px dashed #21262d;border-radius:6px;font-size:12px;color:#8b949e">'
-            '∅  No open positions right now.</div>',
+            '<div class="empty-state"><div class="big">∅</div>'
+            'No open positions right now.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -984,12 +1381,12 @@ with row2_l:
         view_df = view_df[["Pos #", "Side", "strike", "Opened", "L", "Regime", "uPnL"]]
         st.dataframe(
             view_df.style.format({"uPnL": "${:+.2f}"}),
-            width='stretch', hide_index=True, height=108,
+            width='stretch', hide_index=True, height=150,
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Panel 5 — Closed Today
-    st.markdown('<div class="panel"><h3>Panel 5 — Closed Today</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">✅</span>Closed Today</h3>', unsafe_allow_html=True)
     if CLOSED_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1047,7 +1444,7 @@ with row2_l:
 
 with row2_r:
     # Panel 7 — Exit Vote Tally
-    st.markdown('<div class="panel"><h3>Panel 7 — Exit Vote Tally</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">🗳️</span>Exit Vote Tally</h3>', unsafe_allow_html=True)
     total_votes = sum(VOTE_TALLY.values()) or 1
     v0 = VOTE_TALLY["votes=0 [STAY]"]
     v1 = VOTE_TALLY["votes=1 [STAY]"]
@@ -1076,7 +1473,7 @@ with row2_r:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Panel 6 — Rejection Funnel
-    st.markdown('<div class="panel"><h3>Panel 6 — Rejection Funnel</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h3><span class="panel-icon">🔀</span>Entry Rejections</h3>', unsafe_allow_html=True)
     # Prefer log-derived counts (broader), fallback to DB
     counts = REJECTIONS["log_counts"] or REJECTIONS["db_counts"]
     if counts:
@@ -1111,7 +1508,7 @@ if DECISION_STREAM:
     rows_html = "".join(
         f'<div class="log-line {r["level"]}">'
         f'<span class="ts">{r["ts"]}</span> '
-        f'<span style="color:#8b949e">[{r["level"]}]</span> '
+        f'<span style="color:var(--text-secondary)">[{r["level"]}]</span> '
         f'<span class="tag">[{r["tag"]}]</span> '
         f'{r["msg"][:160]}'
         f'</div>'
@@ -1119,28 +1516,28 @@ if DECISION_STREAM:
     )
     st.markdown(
         '<div class="panel">'
-        '<h3 style="display:flex;justify-content:space-between;align-items:center">'
-        '<span>Panel 8 — Engine Decision Stream</span>'
-        f'<span style="font-size:10px;color:#6e7681;text-transform:none;letter-spacing:0">'
-        f'last 2 of {len(DECISION_STREAM)} buffered · from {LOG_PATH.name}'
+        '<h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'
+        '<span><span class="panel-icon">📡</span>Decision Stream</span>'
+        f'<span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;font-weight:500">'
+        f'last 2 of {len(DECISION_STREAM)} · {LOG_PATH.name}'
         '</span>'
         '</h3>'
-        f'<div style="background:#0d1117;padding:6px 10px;border-radius:6px;'
-        f'border:1px solid #21262d">{rows_html}</div>'
+        f'<div style="background:var(--bg-primary);padding:10px;border-radius:6px;'
+        f'border:1px solid var(--border);max-height:200px;overflow-y:auto">{rows_html}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
-    with st.expander(f"View full {len(DECISION_STREAM)}-line stream", expanded=False):
+    with st.expander(f"📜 View full {len(DECISION_STREAM)}-line stream", expanded=False):
         st.markdown(
-            '<div style="background:#0d1117;padding:8px 12px;border-radius:6px;'
-            'border:1px solid #21262d;max-height:360px;overflow-y:auto">',
+            '<div style="background:var(--bg-primary);padding:12px;border-radius:6px;'
+            'border:1px solid var(--border);max-height:400px;overflow-y:auto">',
             unsafe_allow_html=True,
         )
         for row in DECISION_STREAM:
             st.markdown(
                 f'<div class="log-line {row["level"]}">'
                 f'<span class="ts">{row["ts"]}</span> '
-                f'<span style="color:#8b949e">[{row["level"]}]</span> '
+                f'<span style="color:var(--text-secondary)">[{row["level"]}]</span> '
                 f'<span class="tag">[{row["tag"]}]</span> '
                 f'{row["msg"][:200]}'
                 f'</div>',
@@ -1149,17 +1546,66 @@ if DECISION_STREAM:
         st.markdown("</div>", unsafe_allow_html=True)
 else:
     st.markdown(
-        '<div class="panel"><h3>Panel 8 — Engine Decision Stream</h3>'
-        f'<div style="font-size:12px;color:#8b949e;padding:8px 0">'
-        f'Log not found at `{LOG_PATH}` (read-only — engine log dir preserved as-is).</div></div>',
+        '<div class="panel"><h3><span class="panel-icon">📡</span>Decision Stream</h3>'
+        f'<div class="empty-state"><div class="big">📭</div>'
+        f'Log not found at<br><code style="font-size:11px">{LOG_PATH}</code>'
+        f'<div style="font-size:11px;margin-top:0.5rem">Engine may not be running or logs directory is missing.</div></div></div>',
         unsafe_allow_html=True,
     )
 
 # Footer
+st.markdown(
+    """
+    <hr style="margin:3rem 0 1rem;border:none;border-top:2px solid var(--border)">
+    """,
+    unsafe_allow_html=True,
+)
+
 err_count_in_footer = sum(1 for line in LOG_LINES if "[ERROR]" in line)
-market_disp_map = {True: "🟢 OPEN", False: "🟡 CLOSED", None: "⚪ ?"}; market_disp = market_disp_map[MARKET_OPEN]
-st.caption(
-    f"Phase 1 · {len(LOG_LINES)} log lines buffered · "
-    f"engine: {status_text} · market: {market_disp} · "
-    f"phase 0 dummy data replaced; all 8 panels live · {err_count_in_footer} log errors today"
+market_disp_map = {True: "🟢 OPEN", False: "🔴 CLOSED", None: "⚪ UNKNOWN"}
+market_disp = market_disp_map[MARKET_OPEN]
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.markdown(
+        f"""
+        <div style="font-size:12px;color:var(--text-secondary)">
+            <div><b style="color:var(--text-primary)">Engine Status</b></div>
+            <div>{status_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with col2:
+    st.markdown(
+        f"""
+        <div style="font-size:12px;color:var(--text-secondary)">
+            <div><b style="color:var(--text-primary)">Market Status</b></div>
+            <div>{market_disp}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with col3:
+    st.markdown(
+        f"""
+        <div style="font-size:12px;color:var(--text-secondary)">
+            <div><b style="color:var(--text-primary)">Statistics</b></div>
+            <div>{len(LOG_LINES)} log lines · {err_count_in_footer} errors</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    f"""
+    <div style="margin-top:2rem;padding-top:1rem;border-top:1px solid var(--border);text-align:center;font-size:11px;color:var(--text-muted)">
+        <div>IBKR Today Dashboard — Phase 1 (Real Data)</div>
+        <div style="margin-top:0.5rem">Engine: {ENGINE_DIR}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
