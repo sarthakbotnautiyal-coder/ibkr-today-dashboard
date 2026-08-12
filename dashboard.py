@@ -947,11 +947,10 @@ def panel3_signal_intent() -> dict:
 
 def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
     df, err = safe_query(
-        "SELECT id, ticker, side, short_strike, long_strike, open_time, status, layer, "
-        "       entry_regime, entry_spx_spot, credit, fill_price, fill_time "
+        "SELECT id, ticker, side, short_strike, long_strike, credit, num_contracts "
         "FROM positions "
         "WHERE status = 'open' AND DATE(open_time) <= DATE('now', '-4 hours') "
-        "ORDER BY open_time"
+        "ORDER BY id DESC"
     )
     if df is None or df.empty:
         return pd.DataFrame(), err
@@ -1288,20 +1287,18 @@ with row2_l:
             unsafe_allow_html=True,
         )
     else:
-        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "open_time", "layer", "entry_regime", "credit", "upnl"]].copy()
+        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit", "num_contracts", "upnl"]].copy()
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
-        view_df["Entered"] = view_df["open_time"].apply(_parse_hhmm)
         view_df = view_df.rename(columns={
             "id": "Pos #",
             "side": "Side",
-            "layer": "Layer",
-            "entry_regime": "Entry Regime",
             "credit": "Credit Received",
+            "num_contracts": "Contracts",
             "upnl": "Unrealized P&L",
         })
-        view_df = view_df[["Pos #", "Side", "Strike", "Entered", "Layer", "Entry Regime", "Credit Received", "Unrealized P&L"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "Contracts", "Unrealized P&L"]]
         st.dataframe(
             view_df.style.format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"}),
             width='stretch', hide_index=True, height=150,
