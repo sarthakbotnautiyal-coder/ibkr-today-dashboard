@@ -1,3 +1,7 @@
 streamlit>=1.36
 streamlit-autorefresh>=1.0.1
 pandas>=2.0
+altair>=5.0
+# Cross-platform process inspection (cwd + start time). Without it the engine
+# health panel falls back to pgrep/lsof, which do not exist on Windows.
+psutil>=5.9

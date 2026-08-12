@@ -30,6 +30,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import date, datetime, timedelta
@@ -40,6 +41,11 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+
+try:
+    import psutil
+except ImportError:  # optional — POSIX falls back to pgrep/lsof/ps below
+    psutil = None
 
 # ---------------------------------------------------------------------------
 # Config layer
@@ -67,7 +73,13 @@ def _load_dotenv(env_path: Path) -> None:
 _load_dotenv(Path(__file__).parent / ".env")
 
 DEFAULT_ENGINE_DIR = "/Users/ubexbot/.openclaw/workspace-venkat/ibkr_trader_engine"
-ENGINE_DIR = Path(os.environ.get("IBKR_ENGINE_DIR", DEFAULT_ENGINE_DIR))
+# .strip() matters on Windows: `set VAR=C:\path && streamlit run ...` in cmd.exe
+# assigns everything up to the &&, trailing space included, which would send
+# every derived path to 'C:\path \data\positions.db'. Quotes get stripped for
+# the same reason (PowerShell users tend to quote paths with spaces).
+ENGINE_DIR = Path(
+    os.environ.get("IBKR_ENGINE_DIR", DEFAULT_ENGINE_DIR).strip().strip('"').strip("'")
+)
 DB_PATH = ENGINE_DIR / "data" / "positions.db"
 ET = ZoneInfo("America/New_York")
 
@@ -769,7 +781,41 @@ def engine_pid() -> int | None:
     Note: `lsof -p PID -d cwd` without -a OR-combines the filters on macOS
     and lists every process's cwd. Adding -a forces AND so we get ONLY the
     cwd of the given PID (verified 2026-07-08 10:20 ET with all six siblings).
+
+    psutil is preferred where installed because it reads cwd directly on
+    Windows, macOS and Linux alike; pgrep/lsof exist on none of Windows.
     """
+    if psutil is not None:
+        return _engine_pid_psutil()
+    return _engine_pid_posix()
+
+
+def _cwd_matches_engine(cwd: str) -> bool:
+    """Suffix-match a process cwd against the engine directory.
+
+    Separators are normalised because the marker is written POSIX-style but
+    Windows reports 'C:\\Users\\sahil\\ibkr_trader_engine'.
+    """
+    return IBKR_ENGINE_CWD_MARKER in cwd.replace("\\", "/").rstrip("/")
+
+
+def _engine_pid_psutil() -> int | None:
+    """Cross-platform PID lookup: any python running run.py from the engine cwd."""
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmdline = proc.info["cmdline"] or []
+            if not any("run.py" in part for part in cmdline):
+                continue
+            if _cwd_matches_engine(proc.cwd()):
+                return proc.info["pid"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            # Process died mid-scan, or belongs to another user — skip it.
+            continue
+    return None
+
+
+def _engine_pid_posix() -> int | None:
+    """pgrep/lsof fallback for POSIX hosts without psutil installed."""
     try:
         out = subprocess.run(
             ["pgrep", "-f", r"run\.py"],
@@ -785,15 +831,25 @@ def engine_pid() -> int | None:
             )
             # -F n output: one or more `n<path>` lines; pick the cwd line
             for line in lsof_out.stdout.splitlines():
-                if line.startswith("n") and IBKR_ENGINE_CWD_MARKER in line:
+                if line.startswith("n") and _cwd_matches_engine(line):
                     return pid
         return None
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError):
+    # OSError, not SubprocessError: a missing binary raises FileNotFoundError,
+    # which is NOT a subclass of SubprocessError. Without OSError here, a host
+    # lacking pgrep (every Windows box) crashes the entire dashboard on import
+    # rather than just reporting the engine as stopped.
+    except (subprocess.SubprocessError, OSError, ValueError):
         return None
 
 
 def engine_uptime(pid: int) -> timedelta | None:
-    """Process uptime via ps -o etime=."""
+    """Process uptime — psutil where available, else `ps -o etime=`."""
+    if psutil is not None:
+        try:
+            started = datetime.fromtimestamp(psutil.Process(pid).create_time())
+            return timedelta(seconds=int((datetime.now() - started).total_seconds()))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, ValueError):
+            return None
     try:
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "etime="],
@@ -809,24 +865,40 @@ def engine_uptime(pid: int) -> timedelta | None:
             days = int(d)
         h, m, sec = s.split(":")
         return timedelta(days=days, hours=int(h), minutes=int(m), seconds=int(sec))
-    except (subprocess.SubprocessError, ValueError):
+    except (subprocess.SubprocessError, OSError, ValueError):
         return None
 
 
 def market_open_today() -> bool | None:
-    """True if NYSE open today, False if closed, None on script error."""
-    try:
-        out = subprocess.run(
-            ["python3", IS_MARKET_OPEN_SCRIPT],
-            capture_output=True, text=True, timeout=5.0,
-        )
+    """True if NYSE open today, False if closed, None on script error.
+
+    Returns None when the helper script is absent, which is the normal case
+    off the primary macOS host — the caller renders 'unknown' rather than
+    treating it as closed.
+    """
+    if not Path(IS_MARKET_OPEN_SCRIPT).is_file():
+        return None
+
+    # The helper lives outside this project and imports pandas_market_calendars
+    # from the *system* interpreter, which this venv does not have — so
+    # sys.executable is deliberately not tried first on POSIX. Windows ships
+    # python.exe with no 'python3' on PATH, hence the different order there.
+    candidates = (
+        [sys.executable, "python"] if os.name == "nt" else ["python3", sys.executable]
+    )
+    for exe in candidates:
+        try:
+            out = subprocess.run(
+                [exe, IS_MARKET_OPEN_SCRIPT],
+                capture_output=True, text=True, timeout=5.0,
+            )
+        except (subprocess.SubprocessError, OSError):
+            continue  # interpreter missing or hung — try the next one
         if out.returncode == 0 and "OPEN" in out.stdout:
             return True
         if out.returncode == 1 and "CLOSED" in out.stdout:
             return False
-        return None
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-        return None
+    return None
 
 
 # ---------------------------------------------------------------------------

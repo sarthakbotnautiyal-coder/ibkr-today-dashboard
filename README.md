@@ -63,6 +63,25 @@ export IBKR_ENGINE_DIR=/path/to/your/ibkr_trader_engine
 ./venv/bin/streamlit run dashboard.py --server.port 8501
 ```
 
+#### Option 2b: Windows
+
+Use PowerShell — set the variable on its own line, then run:
+
+```powershell
+$env:IBKR_ENGINE_DIR = "C:\Users\you\ibkr_trader_engine"
+streamlit run dashboard.py --server.port 8501
+```
+
+> **Avoid `set VAR=value && streamlit ...` in `cmd.exe`.** That form assigns
+> everything up to the `&&`, including the space before it, so the engine
+> directory silently gains a trailing space and every derived path misses.
+> The dashboard strips it defensively, but PowerShell above is the safer form.
+
+Engine health detection uses `psutil` on Windows (`pgrep`/`lsof` are
+Unix-only), so make sure `pip install -r requirements.txt` has been run. If
+`psutil` is missing the dashboard still runs — the health panel just reports
+the engine as stopped.
+
 #### Option 3: Headless Mode (Server/Background)
 ```bash
 ./venv/bin/streamlit run dashboard.py --server.port 8501 --server.headless true
