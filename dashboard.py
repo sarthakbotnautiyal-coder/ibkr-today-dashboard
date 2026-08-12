@@ -1224,6 +1224,18 @@ def section_header(icon: str, label: str, note: str = "") -> None:
     )
 
 
+def table_height(n_rows: int) -> int:
+    """Exact pixel height for an n-row st.dataframe.
+
+    Neither `height='auto'` nor omitting height shrinks the grid to its
+    content — Streamlit holds a minimum viewport and pads the remainder with
+    blank filler rows. Those rows are not in the DataFrame, so dropna cannot
+    remove them; only pinning the height to the real row count does.
+    """
+    ROW_PX, HEADER_PX, BORDER_PX = 35, 35, 2
+    return HEADER_PX + ROW_PX * max(n_rows, 1) + BORDER_PX
+
+
 def _parse_hhmm(iso_ts: str) -> str:
     """Extract HH:MM from '2026-07-07T09:34:37-04:00' → '09:34'."""
     if not iso_ts:
@@ -1353,7 +1365,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
             view_df.style
             .format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"})
             .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["Unrealized P&L"]),
-            use_container_width=True, hide_index=True,
+            width="stretch", height=table_height(len(view_df)), hide_index=True,
         )
 
     section_header("✅", "Closed Today")
@@ -1380,7 +1392,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
             view_df.style
             .format({"Credit Received": "${:.2f}", "P&L": "${:+.2f}"})
             .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["P&L"]),
-            use_container_width=True, hide_index=True,
+            width="stretch", height=table_height(len(view_df)), hide_index=True,
         )
 
         total_pnl = float(CLOSED_DF["pnl"].sum())
@@ -1506,12 +1518,13 @@ else:
                 "win_rate": "Win %",
             })
             summary_df = summary_df[[period_label, "Trades", "Wins", "Win %", "P&L"]]
+            summary_df = summary_df.dropna(how="all")
             st.dataframe(
                 summary_df.sort_values(period_label, ascending=False).style
                 .format({"P&L": "${:+.2f}", "Win %": "{:.0f}%"})
                 .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0
                      else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "",
                      subset=["P&L"]),
-                width='stretch', hide_index=True, height=320,
+                width="stretch", height=table_height(len(summary_df)), hide_index=True,
             )
 
