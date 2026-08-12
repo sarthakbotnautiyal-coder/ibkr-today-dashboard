@@ -166,18 +166,18 @@ CUSTOM_CSS = """
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
   }
 
   .panel h3 {
-    margin: 0 0 1.5rem 0;
-    font-size: 14px;
+    margin: 0 0 0.75rem 0;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--text-primary);
+    color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -1240,7 +1240,7 @@ row1_l, row1_r = st.columns([3, 2])
 
 with tab1:
     # P&L Summary (full width now that Live Market Data is removed)
-    st.markdown('<div class="panel"><h3><span class="panel-icon">💰</span>P&amp;L Summary</h3>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">💰</span>P&amp;L Summary</h4>', unsafe_allow_html=True)
     realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
     unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
 
@@ -1282,7 +1282,7 @@ with tab1:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Open Positions and Closed Today row
-    st.markdown('<div class="panel"><h4 style="margin:0 0 1rem 0;font-size:13px;font-weight:600;color:var(--text-primary);text-transform:uppercase;letter-spacing:0.08em"><span class="panel-icon">📍</span>Open Positions</h4>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">📍</span>Open Positions</h4>', unsafe_allow_html=True)
     if OPEN_POS_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1310,7 +1310,7 @@ with tab1:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Panel 5 — Closed Today
-    st.markdown('<div class="panel"><h4 style="margin:0 0 1rem 0;font-size:13px;font-weight:600;color:var(--text-primary);text-transform:uppercase;letter-spacing:0.08em"><span class="panel-icon">✅</span>Closed Today</h4>', unsafe_allow_html=True)
+    st.markdown('<div class="panel"><h4 style="margin:0 0 0.75rem 0;font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.1em;display:flex;align-items:center;gap:0.5rem"><span style="font-size:14px">✅</span>Closed Today</h4>', unsafe_allow_html=True)
     if CLOSED_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
