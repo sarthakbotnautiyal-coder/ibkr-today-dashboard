@@ -100,7 +100,7 @@ st.set_page_config(
     page_title=PAGE_TITLE,
     page_icon=PAGE_ICON,
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 CUSTOM_CSS = """
@@ -1025,6 +1025,75 @@ def panel8_decision_stream(n: int = DECISION_STREAM_LINES) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Historical Analysis Functions
+# ---------------------------------------------------------------------------
+
+def get_historical_pnl_by_day() -> pd.DataFrame:
+    """Get daily P&L summary from all closed positions."""
+    df, _ = safe_query(
+        "SELECT DATE(close_time) AS date, COUNT(*) AS trades, SUM(pnl) AS daily_pnl, "
+        "       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins, num_contracts "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') "
+        "GROUP BY DATE(close_time) "
+        "ORDER BY date DESC"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Convert date string to datetime
+    df["date"] = pd.to_datetime(df["date"])
+    return df.sort_values("date")
+
+
+def get_historical_pnl_by_month() -> pd.DataFrame:
+    """Get monthly P&L summary from all closed positions."""
+    df, _ = safe_query(
+        "SELECT strftime('%Y-%m', close_time) AS month, COUNT(*) AS trades, SUM(pnl) AS monthly_pnl, "
+        "       SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') "
+        "GROUP BY strftime('%Y-%m', close_time) "
+        "ORDER BY month DESC"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+    return df.sort_values("month")
+
+
+def get_contracts_per_day() -> pd.DataFrame:
+    """Get number of contracts per day from closed positions."""
+    df, _ = safe_query(
+        "SELECT DATE(close_time) AS date, SUM(num_contracts) AS total_contracts, COUNT(*) AS trades "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') AND num_contracts IS NOT NULL "
+        "GROUP BY DATE(close_time) "
+        "ORDER BY date DESC"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"])
+    return df.sort_values("date")
+
+
+def get_cumulative_pnl() -> pd.DataFrame:
+    """Get cumulative P&L over time."""
+    df, _ = safe_query(
+        "SELECT DATE(close_time) AS date, pnl, close_time "
+        "FROM positions "
+        "WHERE status IN ('closed', 'expired') "
+        "ORDER BY close_time ASC"
+    )
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df["date"] = pd.to_datetime(df["date"])
+    df["cumulative_pnl"] = df["pnl"].cumsum()
+    return df
+
+
+# ---------------------------------------------------------------------------
 # Fetch all (cached for 5s via Streamlit's autorefresh + our own state)
 # ---------------------------------------------------------------------------
 
@@ -1038,6 +1107,12 @@ VOTE_TALLY = panel7_exit_votes()
 DECISION_STREAM = panel8_decision_stream()
 
 MARKET_OPEN = market_open_today()
+
+# Historical data
+DAILY_PNL_DF = get_historical_pnl_by_day()
+MONTHLY_PNL_DF = get_historical_pnl_by_month()
+CONTRACTS_PER_DAY_DF = get_contracts_per_day()
+CUMULATIVE_PNL_DF = get_cumulative_pnl()
 
 
 # ---------------------------------------------------------------------------
@@ -1131,6 +1206,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Create tabs for Live Dashboard and Trade History
+tab1, tab2 = st.tabs(["📊 Live Dashboard", "📈 Trade History"])
+
 
 # ---------------------------------------------------------------------------
 # Render — Panel 1 Health (full width above main grid)
@@ -1144,7 +1222,8 @@ st.markdown(
 
 row1_l, row1_r = st.columns([3, 2])
 
-with row1_l:
+with tab1:
+    # P&L Summary (full width now that Live Market Data is removed)
     st.markdown('<div class="panel"><h3><span class="panel-icon">💰</span>P&amp;L Summary</h3>', unsafe_allow_html=True)
     realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
     unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
@@ -1186,99 +1265,52 @@ with row1_l:
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-with row1_r:
-    st.markdown('<div class="panel"><h3><span class="panel-icon">📊</span>Live Market Data</h3>', unsafe_allow_html=True)
-    tick = SIGNAL_INTENT["tick"]
-    if tick:
-        vix_value = tick.get("vix", "—")
-        st.markdown(
-            f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:14px;line-height:1.8">'
-            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1rem">'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">SPX</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["spx"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">EM</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["em"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">GEX</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["gex"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase;color:var(--accent-red)">VIX 📈</span><br><span style="font-size:20px;font-weight:700;color:var(--accent-red)">{vix_value}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">RSI</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["rsi"]}</span></div>'
-            f'  <div style=""></div>'
-            f'</div>'
-            f'<div style="padding-top:1rem;border-top:1px solid var(--border);font-size:12px">'
-            f'  <div><span style="color:var(--text-secondary)">Regime:</span> <span style="color:var(--accent-blue);font-weight:600">{tick["regime"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary)">GEX Regime:</span> <span style="color:var(--accent-blue);font-weight:600">{tick["gex_regime"]}</span></div>'
-            f'  <div style="margin-top:0.5rem;color:var(--text-muted);font-size:11px">Last update: {tick["ts"]}</div>'
-            f'</div></div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="empty-state"><div class="big">📡</div>'
-            'Waiting for market data...</div>',
-            unsafe_allow_html=True,
-        )
+    # Now continue with the rest of the dashboard
+    row2_l, row2_r = st.columns([3, 2])
 
-    if SIGNAL_INTENT["entries"]:
-        layer = SIGNAL_INTENT["entries"][0]["layer"]
-        layer_pill = "pill-blue" if layer == "1" else "pill-amber" if layer == "2" else "pill-green"
+with row2_l:
+    st.markdown('<div class="panel"><h3><span class="panel-icon">💰</span>P&amp;L Summary</h3>', unsafe_allow_html=True)
+    realized_class = "pos" if PNL["realized"] > 0 else "neg" if PNL["realized"] < 0 else "zero"
+    unreal_class = "pos" if PNL["unrealized"] > 0 else "neg" if PNL["unrealized"] < 0 else "zero"
 
-        st.markdown(
-            f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
-            f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">'
-            f'<div><span style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600">Current Layer</span></div>'
-            f'<span class="pill {layer_pill}">L{layer}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    total_pnl = PNL["realized"] + PNL["unrealized"]
+    total_class = "pos" if total_pnl > 0 else "neg" if total_pnl < 0 else "zero"
 
-    # Recent entries - only show if there are entries
-    if SIGNAL_INTENT["entries"]:
-        st.markdown(
-            '<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.75rem;font-weight:600;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">'
-            f'Recent Entries ({len(SIGNAL_INTENT["entries"])})</div>',
-            unsafe_allow_html=True,
-        )
-        entry_rows = "".join(
-            f'<div style="display:grid;grid-template-columns:50px 80px 60px 80px;gap:1rem;padding:8px;border-bottom:1px solid var(--border);align-items:center;font-size:12px">'
-            f'  <div><span style="color:var(--text-muted)">●</span> {e["ts"].split(" ")[-1] if e["ts"] else ""}</div>'
-            f'  <div><span style="color:var(--accent-green);font-weight:600">{e["side"]}</span></div>'
-            f'  <div style="font-family:SF Mono,monospace;color:var(--text-primary)">{e["strike"]}</div>'
-            f'  <div style="font-weight:600;color:var(--text-primary)">${float(e["credit"]):.2f}</div>'
-            f'</div>'
-            for e in SIGNAL_INTENT["entries"]
-        )
-        st.markdown(entry_rows, unsafe_allow_html=True)
-
-    # Skip reasons
     st.markdown(
-        '<div style="margin-top:1rem;font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600;margin-bottom:0.75rem">'
-        'Rejection Reasons</div>',
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2rem;align-items:flex-start;margin-bottom:2rem">'
+        f'  <div>'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Realized Today</div>'
+        f'    <div class="big-number {realized_class}">{_fmt_money(PNL["realized"])}</div>'
+        f'  </div>'
+        f'  <div>'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Unrealized</div>'
+        f'    <div class="big-number {unreal_class}">{_fmt_money(PNL["unrealized"])}</div>'
+        f'  </div>'
+        f'  <div style="background:var(--bg-primary);padding:1rem;border-radius:8px;border:1px solid var(--border)">'
+        f'    <div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.5rem;font-weight:600">Total P&amp;L</div>'
+        f'    <div class="big-number {total_class}" style="font-size:36px">{_fmt_money(total_pnl)}</div>'
+        f'  </div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
-    if SIGNAL_INTENT["skip_counts"]:
-        max_v = max(SIGNAL_INTENT["skip_counts"].values())
-        skip_bars = "".join(
-            f'<div style="display:flex;align-items:center;gap:0.75rem;font-size:12px;margin-bottom:0.75rem">'
-            f'<div style="width:140px;color:var(--text-primary);word-break:break-word">{r}</div>'
-            f'<div style="flex:1;background:var(--border);border-radius:4px;height:16px;overflow:hidden">'
-            f'<div style="width:{100 * v / max_v:.0f}%;height:100%;background:var(--accent-red);opacity:0.7"></div>'
-            f'</div>'
-            f'<div style="width:32px;text-align:right;color:var(--text-secondary);font-family:SF Mono,monospace;font-weight:600">{v}</div>'
-            f'</div>'
-            for r, v in SIGNAL_INTENT["skip_counts"].items()
-        )
-        st.markdown(skip_bars, unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="color:var(--text-muted);font-size:12px;padding:0.75rem">No rejections today</div>', unsafe_allow_html=True)
-
+    # Filter out signals_today since it's not being tracked properly
+    counts_to_show = {k: v for k, v in PNL["counts"].items() if k != "signals_today"}
+    counts_html = "".join(
+        f'<div class="count-cell"><div class="c-label">{k.replace("_", " ")}</div>'
+        f'<div class="c-value">{v}</div></div>'
+        for k, v in counts_to_show.items()
+    )
+    st.markdown(
+        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
+        f'<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:1rem;font-weight:600">Today\'s Activity</div>'
+        f'<div class="counts-grid">{counts_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
-
-# ---------------------------------------------------------------------------
-# Render — Row 2: Open Pos (left) | Closed Today (nested under) | Votes + Rejection (right)
-# ---------------------------------------------------------------------------
-
-row2_l, row2_r = st.columns([3, 2])
-
-with row2_l:
+    # Open Positions and Closed Today row
     st.markdown('<div class="panel"><h3><span class="panel-icon">📍</span>Open Positions</h3>', unsafe_allow_html=True)
     if OPEN_POS_DF.empty:
         st.markdown(
@@ -1452,6 +1484,109 @@ else:
         f'<div style="font-size:11px;margin-top:0.5rem">Engine may not be running or logs directory is missing.</div></div></div>',
         unsafe_allow_html=True,
     )
+
+    # Footer (inside tab1)
+    st.markdown(
+        """
+        <hr style="margin:3rem 0 1rem;border:none;border-top:2px solid var(--border)">
+        """,
+        unsafe_allow_html=True,
+    )
+
+with tab2:
+    st.markdown('<h2 style="margin-top:0">Trading History Analytics</h2>', unsafe_allow_html=True)
+
+    # Time period selector
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        view_type = st.selectbox("View", ["Daily", "Monthly"], key="history_view")
+
+    if view_type == "Daily":
+        if not DAILY_PNL_DF.empty:
+            # Daily P&L Chart
+            st.markdown('<h3 style="margin-top:1.5rem">Daily P&L</h3>', unsafe_allow_html=True)
+            daily_chart_df = DAILY_PNL_DF[["date", "daily_pnl"]].set_index("date")
+            st.bar_chart(daily_chart_df, color="#00d97e")
+
+            # Daily Statistics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Trades", int(DAILY_PNL_DF["trades"].sum()))
+            with col2:
+                total_pnl = DAILY_PNL_DF["daily_pnl"].sum()
+                st.metric("Total P&L", f"${total_pnl:+,.2f}")
+            with col3:
+                total_wins = int(DAILY_PNL_DF["wins"].sum())
+                st.metric("Total Wins", total_wins)
+            with col4:
+                win_rate = (total_wins / int(DAILY_PNL_DF["trades"].sum())) * 100 if DAILY_PNL_DF["trades"].sum() > 0 else 0
+                st.metric("Win Rate", f"{win_rate:.0f}%")
+
+            # Contracts per day
+            st.markdown('<h3 style="margin-top:1.5rem">Contracts Per Day</h3>', unsafe_allow_html=True)
+            if not CONTRACTS_PER_DAY_DF.empty:
+                contracts_chart_df = CONTRACTS_PER_DAY_DF[["date", "total_contracts"]].set_index("date")
+                st.bar_chart(contracts_chart_df, color="#58a6ff")
+            else:
+                st.info("No contract data available")
+
+            # Daily summary table
+            st.markdown('<h3 style="margin-top:1.5rem">Daily Summary</h3>', unsafe_allow_html=True)
+            summary_df = DAILY_PNL_DF[["date", "trades", "wins", "daily_pnl"]].copy()
+            summary_df["date"] = summary_df["date"].dt.strftime("%Y-%m-%d")
+            summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
+            summary_df = summary_df.rename(columns={
+                "date": "Date",
+                "trades": "Trades",
+                "wins": "Wins",
+                "daily_pnl": "P&L",
+                "win_rate": "Win %"
+            })
+            st.dataframe(
+                summary_df.style.format({"P&L": "${:+.2f}"}),
+                width='stretch', hide_index=True
+            )
+        else:
+            st.info("No historical data available yet")
+
+    else:  # Monthly view
+        if not MONTHLY_PNL_DF.empty:
+            # Monthly P&L Chart
+            st.markdown('<h3 style="margin-top:1.5rem">Monthly P&L</h3>', unsafe_allow_html=True)
+            monthly_chart_df = MONTHLY_PNL_DF[["month", "monthly_pnl"]].set_index("month")
+            st.bar_chart(monthly_chart_df, color="#00d97e")
+
+            # Monthly Statistics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Trades", int(MONTHLY_PNL_DF["trades"].sum()))
+            with col2:
+                total_pnl = MONTHLY_PNL_DF["monthly_pnl"].sum()
+                st.metric("Total P&L", f"${total_pnl:+,.2f}")
+            with col3:
+                total_wins = int(MONTHLY_PNL_DF["wins"].sum())
+                st.metric("Total Wins", total_wins)
+            with col4:
+                win_rate = (total_wins / int(MONTHLY_PNL_DF["trades"].sum())) * 100 if MONTHLY_PNL_DF["trades"].sum() > 0 else 0
+                st.metric("Win Rate", f"{win_rate:.0f}%")
+
+            # Monthly summary table
+            st.markdown('<h3 style="margin-top:1.5rem">Monthly Summary</h3>', unsafe_allow_html=True)
+            summary_df = MONTHLY_PNL_DF[["month", "trades", "wins", "monthly_pnl"]].copy()
+            summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
+            summary_df = summary_df.rename(columns={
+                "month": "Month",
+                "trades": "Trades",
+                "wins": "Wins",
+                "monthly_pnl": "P&L",
+                "win_rate": "Win %"
+            })
+            st.dataframe(
+                summary_df.style.format({"P&L": "${:+.2f}"}),
+                width='stretch', hide_index=True
+            )
+        else:
+            st.info("No historical data available yet")
 
 # Footer
 st.markdown(
