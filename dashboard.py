@@ -574,7 +574,7 @@ def safe_query(sql: str, params: tuple = ()) -> tuple[pd.DataFrame | None, str |
 # ---------------------------------------------------------------------------
 
 TICK_RE = re.compile(
-    r"\[TICK\]\s+SPX=(?P<spx>[\d.]+)\s*\|\s*EM=(?P<em>[\d.]+)\s*\|\s*GEX=(?P<gex>[\d-]+)\s*\|\s*regime=(?P<regime>\S+)\s*\|\s*RSI=(?P<rsi>[\d.]+)\s*\|\s*GEX_regime=(?P<gex_regime>\S+)"
+    r"\[TICK\]\s+SPX=(?P<spx>[\d.]+)\s*\|\s*EM=(?P<em>[\d.]+)\s*\|\s*GEX=(?P<gex>[\d-]+)\s*\|\s*regime=(?P<regime>\S+)\s*\|\s*RSI=(?P<rsi>[\d.]+)\s*\|\s*GEX_regime=(?P<gex_regime>\S+)(?:\s*\|\s*VIX=(?P<vix>[\d.]+))?"
 )
 ENTRY_RE = re.compile(
     r"\[ENTRY\]\s+(?P<side>PUT|CALL)\s*\|\s*strike=(?P<strike>\S+)\s*\|\s*credit=\$(?P<credit>[\d.]+)\s*\|\s*layer=(?P<layer>\d+)"
@@ -1137,90 +1137,6 @@ st.markdown(
 # Render — Panel 1 Health (full width above main grid)
 # ---------------------------------------------------------------------------
 
-status_text, pill_class = status_pill_state()
-
-# Health Status Row
-st.markdown('<div class="panel" style="margin-bottom:2rem">', unsafe_allow_html=True)
-st.markdown('<h3 style="margin-top:0"><span class="panel-icon">🏥</span>Engine Health Status</h3>', unsafe_allow_html=True)
-
-health_cols = st.columns([1, 1, 1, 1.5, 1.2, 1, 1])
-
-with health_cols[0]:
-    pid_text = str(HEALTH["pid"]) if HEALTH["pid"] else "—"
-    st.markdown(
-        f'<div class="metric"><span class="label">Process ID</span>'
-        f'<span class="value mono">{pid_text}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[1]:
-    st.markdown(
-        f'<div class="metric"><span class="label">Uptime</span>'
-        f'<span class="value mono">{_fmt_uptime(HEALTH["uptime_s"])}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[2]:
-    st.markdown(
-        f'<div class="metric"><span class="label">Status</span>'
-        f'<span class="pill {pill_class}">● {status_text}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[3]:
-    market_status = "🟢 OPEN" if MARKET_OPEN is True else "🔴 CLOSED" if MARKET_OPEN is False else "⚪ UNKNOWN"
-    st.markdown(
-        f'<div class="metric"><span class="label">Market</span>'
-        f'<span class="value" style="font-size:16px">{market_status}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[4]:
-    st.markdown(
-        f'<div class="metric"><span class="label">Log Size</span>'
-        f'<span class="value mono">{_fmt_bytes(HEALTH["log_size_b"])}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[5]:
-    warn_color = "var(--accent-amber)" if HEALTH["warn_count"] > 0 else "var(--text-secondary)"
-    st.markdown(
-        f'<div class="metric"><span class="label">⚠️ Warnings</span>'
-        f'<span class="value mono" style="color:{warn_color}">{HEALTH["warn_count"]}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-with health_cols[6]:
-    err_color = "var(--accent-red)" if HEALTH["err_count"] > 0 else "var(--text-secondary)"
-    st.markdown(
-        f'<div class="metric"><span class="label">🔴 Errors</span>'
-        f'<span class="value mono" style="color:{err_color}">{HEALTH["err_count"]}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-# Last activity
-last_log_disp = (HEALTH["last_log"] or "(no activity yet)")[:80]
-age = f'{HEALTH["last_log_age_s"]}s ago' if HEALTH["last_log_age_s"] is not None else "—"
-db_age = f'DB: {HEALTH["db_age_s"]}s old' if HEALTH["db_age_s"] is not None else 'DB: missing'
-
-st.markdown(
-    f'<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted)">'
-    f'<div style="margin-bottom:0.5rem"><b>Last Activity:</b> {age}</div>'
-    f'<div style="word-break:break-all;font-family:SF Mono,monospace;color:var(--text-primary);margin-bottom:0.5rem">{last_log_disp}</div>'
-    f'<div>{db_age}</div>'
-    f'</div>',
-    unsafe_allow_html=True,
-)
-
-if PNL.get("error"):
-    st.markdown(
-        f'<div style="margin-top:1rem;padding:0.75rem;background:rgba(255,75,75,0.05);border:1px solid rgba(255,75,75,0.2);border-radius:6px;color:var(--accent-red);font-size:12px">'
-        f'<b>⚠️ Database Error:</b> {PNL["error"]}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1255,10 +1171,12 @@ with row1_l:
         unsafe_allow_html=True,
     )
 
+    # Filter out signals_today since it's not being tracked properly
+    counts_to_show = {k: v for k, v in PNL["counts"].items() if k != "signals_today"}
     counts_html = "".join(
         f'<div class="count-cell"><div class="c-label">{k.replace("_", " ")}</div>'
         f'<div class="c-value">{v}</div></div>'
-        for k, v in PNL["counts"].items()
+        for k, v in counts_to_show.items()
     )
     st.markdown(
         f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
@@ -1273,13 +1191,16 @@ with row1_r:
     st.markdown('<div class="panel"><h3><span class="panel-icon">📊</span>Live Market Data</h3>', unsafe_allow_html=True)
     tick = SIGNAL_INTENT["tick"]
     if tick:
+        vix_value = tick.get("vix", "—")
         st.markdown(
             f'<div style="font-family:SF Mono,Menlo,Consolas,monospace;font-size:14px;line-height:1.8">'
-            f'<div style="display:flex;gap:2rem;margin-bottom:1rem;flex-wrap:wrap">'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">SPX</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["spx"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">EM</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["em"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">GEX</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["gex"]}</span></div>'
-            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">RSI</span><br><span style="font-size:18px;font-weight:700;color:var(--text-primary)">{tick["rsi"]}</span></div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1rem">'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">SPX</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["spx"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">EM</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["em"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">GEX</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["gex"]}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase;color:var(--accent-red)">VIX 📈</span><br><span style="font-size:20px;font-weight:700;color:var(--accent-red)">{vix_value}</span></div>'
+            f'  <div><span style="color:var(--text-secondary);font-size:11px;text-transform:uppercase">RSI</span><br><span style="font-size:20px;font-weight:700;color:var(--text-primary)">{tick["rsi"]}</span></div>'
+            f'  <div style=""></div>'
             f'</div>'
             f'<div style="padding-top:1rem;border-top:1px solid var(--border);font-size:12px">'
             f'  <div><span style="color:var(--text-secondary)">Regime:</span> <span style="color:var(--accent-blue);font-weight:600">{tick["regime"]}</span></div>'
@@ -1295,26 +1216,26 @@ with row1_r:
             unsafe_allow_html=True,
         )
 
-    layer = SIGNAL_INTENT["entries"][0]["layer"] if SIGNAL_INTENT["entries"] else "?"
-    layer_pill = "pill-blue" if layer == "1" else "pill-amber" if layer == "2" else "pill-green"
-
-    st.markdown(
-        f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
-        f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">'
-        f'<div><span style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600">Current Layer</span></div>'
-        f'<span class="pill {layer_pill}">L{layer}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Recent entries
-    st.markdown(
-        '<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.75rem;font-weight:600">'
-        f'Recent Entries ({len(SIGNAL_INTENT["entries"])})</div>',
-        unsafe_allow_html=True,
-    )
-
     if SIGNAL_INTENT["entries"]:
+        layer = SIGNAL_INTENT["entries"][0]["layer"]
+        layer_pill = "pill-blue" if layer == "1" else "pill-amber" if layer == "2" else "pill-green"
+
+        st.markdown(
+            f'<div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border)">'
+            f'<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">'
+            f'<div><span style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;font-weight:600">Current Layer</span></div>'
+            f'<span class="pill {layer_pill}">L{layer}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Recent entries - only show if there are entries
+    if SIGNAL_INTENT["entries"]:
+        st.markdown(
+            '<div style="font-size:12px;color:var(--text-secondary);text-transform:uppercase;margin-bottom:0.75rem;font-weight:600;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)">'
+            f'Recent Entries ({len(SIGNAL_INTENT["entries"])})</div>',
+            unsafe_allow_html=True,
+        )
         entry_rows = "".join(
             f'<div style="display:grid;grid-template-columns:50px 80px 60px 80px;gap:1rem;padding:8px;border-bottom:1px solid var(--border);align-items:center;font-size:12px">'
             f'  <div><span style="color:var(--text-muted)">●</span> {e["ts"].split(" ")[-1] if e["ts"] else ""}</div>'
@@ -1325,8 +1246,6 @@ with row1_r:
             for e in SIGNAL_INTENT["entries"]
         )
         st.markdown(entry_rows, unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="color:var(--text-muted);font-size:12px;padding:0.75rem">No entries today yet</div>', unsafe_allow_html=True)
 
     # Skip reasons
     st.markdown(
@@ -1369,18 +1288,22 @@ with row2_l:
             unsafe_allow_html=True,
         )
     else:
-        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "open_time", "layer", "entry_regime", "upnl"]].copy()
-        view_df["strike"] = view_df.apply(
+        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "open_time", "layer", "entry_regime", "credit", "upnl"]].copy()
+        view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
-        view_df["open_time"] = view_df["open_time"].apply(_parse_hhmm)
+        view_df["Entered"] = view_df["open_time"].apply(_parse_hhmm)
         view_df = view_df.rename(columns={
-            "id": "Pos #", "side": "Side", "open_time": "Opened",
-            "layer": "L", "entry_regime": "Regime", "upnl": "uPnL",
+            "id": "Pos #",
+            "side": "Side",
+            "layer": "Layer",
+            "entry_regime": "Entry Regime",
+            "credit": "Credit Received",
+            "upnl": "Unrealized P&L",
         })
-        view_df = view_df[["Pos #", "Side", "strike", "Opened", "L", "Regime", "uPnL"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Entered", "Layer", "Entry Regime", "Credit Received", "Unrealized P&L"]]
         st.dataframe(
-            view_df.style.format({"uPnL": "${:+.2f}"}),
+            view_df.style.format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"}),
             width='stretch', hide_index=True, height=150,
         )
     st.markdown("</div>", unsafe_allow_html=True)
@@ -1443,40 +1366,40 @@ with row2_l:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with row2_r:
-    # Panel 7 — Exit Vote Tally
-    st.markdown('<div class="panel"><h3><span class="panel-icon">🗳️</span>Exit Vote Tally</h3>', unsafe_allow_html=True)
-    total_votes = sum(VOTE_TALLY.values()) or 1
-    v0 = VOTE_TALLY["votes=0 [STAY]"]
-    v1 = VOTE_TALLY["votes=1 [STAY]"]
-    v2 = VOTE_TALLY["votes=2+ [EXIT]"]
-    p0 = 100 * v0 / total_votes
-    p1 = 100 * v1 / total_votes
-    p2 = 100 * v2 / total_votes
-    c0_end, c1_end, c2_end = p0, p0 + p1, p0 + p1 + p2
-    donut_grad = (
-        f"#6e7681 0% {c0_end:.1f}%, "
-        f"#58a6ff {c0_end:.1f}% {c1_end:.1f}%, "
-        f"#00d97e {c1_end:.1f}% {c2_end:.1f}%"
-    )
-    st.markdown(
-        f'<div class="donut-wrap">'
-        f'<div class="donut" style="background: conic-gradient({donut_grad})"></div>'
-        f'<div class="donut-legend">'
-        f'<div class="item"><div class="sw" style="background:#6e7681"></div>votes=0 [STAY] <span style="color:#8b949e;margin-left:auto">{v0}</span></div>'
-        f'<div class="item"><div class="sw" style="background:#58a6ff"></div>votes=1 [STAY] <span style="color:#8b949e;margin-left:auto">{v1}</span></div>'
-        f'<div class="item"><div class="sw" style="background:#00d97e"></div>votes=2+ [EXIT] <span style="color:#8b949e;margin-left:auto">{v2}</span></div>'
-        f'<div style="margin-top:6px;color:#8b949e;font-size:11px">last {EXIT_CHECK_SAMPLE_N} [EXIT CHECK] reads</div>'
-        f'</div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Panel 7 — Exit Vote Tally (only show if there are votes)
+    total_votes = sum(VOTE_TALLY.values()) or 0
+    if total_votes > 0:
+        st.markdown('<div class="panel"><h3><span class="panel-icon">🗳️</span>Exit Vote Tally</h3>', unsafe_allow_html=True)
+        v0 = VOTE_TALLY["votes=0 [STAY]"]
+        v1 = VOTE_TALLY["votes=1 [STAY]"]
+        v2 = VOTE_TALLY["votes=2+ [EXIT]"]
+        p0 = 100 * v0 / total_votes
+        p1 = 100 * v1 / total_votes
+        p2 = 100 * v2 / total_votes
+        c0_end, c1_end, c2_end = p0, p0 + p1, p0 + p1 + p2
+        donut_grad = (
+            f"#6e7681 0% {c0_end:.1f}%, "
+            f"#58a6ff {c0_end:.1f}% {c1_end:.1f}%, "
+            f"#00d97e {c1_end:.1f}% {c2_end:.1f}%"
+        )
+        st.markdown(
+            f'<div class="donut-wrap">'
+            f'<div class="donut" style="background: conic-gradient({donut_grad})"></div>'
+            f'<div class="donut-legend">'
+            f'<div class="item"><div class="sw" style="background:#6e7681"></div>votes=0 [STAY] <span style="color:#8b949e;margin-left:auto">{v0}</span></div>'
+            f'<div class="item"><div class="sw" style="background:#58a6ff"></div>votes=1 [STAY] <span style="color:#8b949e;margin-left:auto">{v1}</span></div>'
+            f'<div class="item"><div class="sw" style="background:#00d97e"></div>votes=2+ [EXIT] <span style="color:#8b949e;margin-left:auto">{v2}</span></div>'
+            f'<div style="margin-top:6px;color:#8b949e;font-size:11px">last {EXIT_CHECK_SAMPLE_N} [EXIT CHECK] reads</div>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # Panel 6 — Rejection Funnel
-    st.markdown('<div class="panel"><h3><span class="panel-icon">🔀</span>Entry Rejections</h3>', unsafe_allow_html=True)
-    # Prefer log-derived counts (broader), fallback to DB
+    # Panel 6 — Entry Rejections (only show if there are rejections)
     counts = REJECTIONS["log_counts"] or REJECTIONS["db_counts"]
     if counts:
+        st.markdown('<div class="panel"><h3><span class="panel-icon">🔀</span>Entry Rejections</h3>', unsafe_allow_html=True)
         rej_df = pd.DataFrame(
             sorted(counts.items(), key=lambda kv: -kv[1]),
             columns=["reason", "count"],
@@ -1490,13 +1413,7 @@ with row2_r:
             f'</div>',
             unsafe_allow_html=True,
         )
-    else:
-        st.markdown(
-            '<div style="font-size:12px;color:#8b949e;padding:8px 0">'
-            'no rejections today</div>',
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
