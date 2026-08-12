@@ -1335,56 +1335,6 @@ with tab1:
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
-with row2_r:
-    # Panel 7 — Exit Vote Tally (only show if there are votes)
-    total_votes = sum(VOTE_TALLY.values()) or 0
-    if total_votes > 0:
-        st.markdown('<div class="panel"><h3><span class="panel-icon">🗳️</span>Exit Vote Tally</h3>', unsafe_allow_html=True)
-        v0 = VOTE_TALLY["votes=0 [STAY]"]
-        v1 = VOTE_TALLY["votes=1 [STAY]"]
-        v2 = VOTE_TALLY["votes=2+ [EXIT]"]
-        p0 = 100 * v0 / total_votes
-        p1 = 100 * v1 / total_votes
-        p2 = 100 * v2 / total_votes
-        c0_end, c1_end, c2_end = p0, p0 + p1, p0 + p1 + p2
-        donut_grad = (
-            f"#6e7681 0% {c0_end:.1f}%, "
-            f"#58a6ff {c0_end:.1f}% {c1_end:.1f}%, "
-            f"#00d97e {c1_end:.1f}% {c2_end:.1f}%"
-        )
-        st.markdown(
-            f'<div class="donut-wrap">'
-            f'<div class="donut" style="background: conic-gradient({donut_grad})"></div>'
-            f'<div class="donut-legend">'
-            f'<div class="item"><div class="sw" style="background:#6e7681"></div>votes=0 [STAY] <span style="color:#8b949e;margin-left:auto">{v0}</span></div>'
-            f'<div class="item"><div class="sw" style="background:#58a6ff"></div>votes=1 [STAY] <span style="color:#8b949e;margin-left:auto">{v1}</span></div>'
-            f'<div class="item"><div class="sw" style="background:#00d97e"></div>votes=2+ [EXIT] <span style="color:#8b949e;margin-left:auto">{v2}</span></div>'
-            f'<div style="margin-top:6px;color:#8b949e;font-size:11px">last {EXIT_CHECK_SAMPLE_N} [EXIT CHECK] reads</div>'
-            f'</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # Panel 6 — Entry Rejections (only show if there are rejections)
-    counts = REJECTIONS["log_counts"] or REJECTIONS["db_counts"]
-    if counts:
-        st.markdown('<div class="panel"><h3><span class="panel-icon">🔀</span>Entry Rejections</h3>', unsafe_allow_html=True)
-        rej_df = pd.DataFrame(
-            sorted(counts.items(), key=lambda kv: -kv[1]),
-            columns=["reason", "count"],
-        ).set_index("reason")
-        st.bar_chart(rej_df, height=180, width='stretch', color='#ff4b4b')
-        src = "log" if REJECTIONS["log_counts"] else "db"
-        st.markdown(
-            f'<div style="font-size:10px;color:#6e7681;margin-top:4px">'
-            f'source: <b>{src}</b>'
-            f'{" · DB-side " + str(len(REJECTIONS["db_counts"])) + " reasons additionally tracked" if REJECTIONS["db_counts"] and REJECTIONS["log_counts"] else ""}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
     # Footer (inside tab1)
     st.markdown(
         """
