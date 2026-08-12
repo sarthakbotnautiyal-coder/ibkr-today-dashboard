@@ -1336,6 +1336,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
         )
     else:
         view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit", "num_contracts", "upnl", "exit_votes"]].copy()
+        view_df = view_df.dropna(how='all')
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
@@ -1349,8 +1350,10 @@ if ACTIVE_PAGE == PAGE_LIVE:
         })
         view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "Contracts", "Exit Votes", "Unrealized P&L"]]
         st.dataframe(
-            view_df.style.format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"}),
-            width='stretch', hide_index=True, height=150,
+            view_df.style
+            .format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"})
+            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["Unrealized P&L"]),
+            use_container_width=True, hide_index=True,
         )
 
     section_header("✅", "Closed Today")
@@ -1362,6 +1365,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
         )
     else:
         view_df = CLOSED_DF.copy()
+        view_df = view_df.dropna(how='all')
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
@@ -1375,8 +1379,8 @@ if ACTIVE_PAGE == PAGE_LIVE:
         st.dataframe(
             view_df.style
             .format({"Credit Received": "${:.2f}", "P&L": "${:+.2f}"})
-            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "", subset=["P&L"]),
-            width='stretch', hide_index=True, height=120,
+            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["P&L"]),
+            use_container_width=True, hide_index=True,
         )
 
         total_pnl = float(CLOSED_DF["pnl"].sum())
