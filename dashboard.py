@@ -1040,18 +1040,24 @@ def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
         return pd.DataFrame(), err
     # Compute uPnL from latest EXIT CHECK per pos
     pos_ids = [int(x) for x in df["id"].tolist()]
-    latest_upnl: dict[int, float] = {pid: 0.0 for pid in pos_ids}
+    # Left empty rather than pre-seeded with 0.0 so "not yet seen" is
+    # distinguishable from "seen and zero"; the .get below supplies the default.
+    latest_upnl: dict[int, float] = {}
     exit_votes: dict[int, str] = {pid: "—" for pid in pos_ids}
 
     upnl_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?uPnL=\$?(?P<sign>[+\-]?)(?P<val>[\d.]+)")
     votes_re = re.compile(r"\[EXIT CHECK\]\s+pos_id=(?P<pid>\d+).*?votes=(?P<v_n>\d+)/(?P<v_m>\d+)")
 
     for ln in reversed(LOG_LINES):
-        # Get uPnL
+        # Get uPnL. LOG_LINES is walked newest-first, so the FIRST match for a
+        # position is its current value — hence `not in`. Overwriting on every
+        # match instead would leave the oldest uPnL in the tail window, making
+        # this table disagree with the P&L Summary header, which takes the
+        # newest. (The votes loop below already had the first-wins guard.)
         m = upnl_re.search(ln)
         if m:
             pid = int(m.group("pid"))
-            if pid in pos_ids and pid in latest_upnl:
+            if pid in pos_ids and pid not in latest_upnl:
                 v = float(m.group("val"))
                 latest_upnl[pid] = v * (1 if m.group("sign") != "-" else -1)
 
@@ -1076,7 +1082,7 @@ def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
 def panel5_closed_today() -> tuple[pd.DataFrame, str | None]:
     df, err = safe_query(
         "SELECT id, ticker, side, short_strike, long_strike, open_time, close_time, "
-        "       credit, pnl, status, exit_regime, fill_time, fill_price "
+        "       credit, num_contracts, pnl, status, exit_regime, fill_time, fill_price "
         "FROM positions "
         "WHERE status IN ('closed', 'expired') AND DATE(close_time) = DATE('now', '-4 hours') "
         "ORDER BY close_time DESC"
@@ -1296,6 +1302,25 @@ def section_header(icon: str, label: str, note: str = "") -> None:
     )
 
 
+OPTION_MULTIPLIER = 100  # shares per option contract
+
+
+def total_credit(credit_per_contract: float, num_contracts: float) -> float:
+    """Actual dollars collected at entry.
+
+    `credit` in the positions table is the per-contract premium in dollars per
+    share ($0.22), so the real figure is credit x 100 x contracts. At 10
+    contracts a $0.22 credit is $220 collected, not $0.22.
+
+    NOTE: do NOT apply this to pnl or upnl. The engine already bakes in both
+    factors before they are written out:
+        pnl  = (credit - close_debit) * 100 * contracts   [engine.py:814]
+        upnl = (credit - current_debit) * 100 * n         [engine.py:1068]
+    Scaling those again would overstate every P&L figure by 100x contracts.
+    """
+    return credit_per_contract * OPTION_MULTIPLIER * (num_contracts or 1)
+
+
 def table_height(n_rows: int) -> int:
     """Exact pixel height for an n-row st.dataframe.
 
@@ -1424,18 +1449,25 @@ if ACTIVE_PAGE == PAGE_LIVE:
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
+        # Dollars actually collected. upnl is deliberately left alone — the
+        # engine already multiplied it by 100 x contracts.
+        view_df["Total Credit"] = view_df.apply(
+            lambda r: total_credit(r["credit"], r["num_contracts"]), axis=1
+        )
         view_df = view_df.rename(columns={
             "id": "Pos #",
             "side": "Side",
-            "credit": "Credit Received",
+            "credit": "Credit / Contract",
             "num_contracts": "Contracts",
             "upnl": "Unrealized P&L",
             "exit_votes": "Exit Votes",
         })
-        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "Contracts", "Exit Votes", "Unrealized P&L"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit / Contract", "Contracts",
+                           "Total Credit", "Exit Votes", "Unrealized P&L"]]
         st.dataframe(
             view_df.style
-            .format({"Credit Received": "${:.2f}", "Unrealized P&L": "${:+.2f}"})
+            .format({"Credit / Contract": "${:.2f}", "Total Credit": "${:,.2f}",
+                     "Unrealized P&L": "${:+.2f}"})
             .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["Unrealized P&L"]),
             width="stretch", height=table_height(len(view_df)), hide_index=True,
         )
@@ -1453,16 +1485,22 @@ if ACTIVE_PAGE == PAGE_LIVE:
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
+        view_df["Total Credit"] = view_df.apply(
+            lambda r: total_credit(r["credit"], r.get("num_contracts", 1)), axis=1
+        )
         view_df = view_df.rename(columns={
             "id": "Pos #",
             "side": "Side",
-            "credit": "Credit Received",
+            "credit": "Credit / Contract",
+            "num_contracts": "Contracts",
             "pnl": "P&L"
         })
-        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "P&L"]]
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit / Contract", "Contracts",
+                           "Total Credit", "P&L"]]
         st.dataframe(
             view_df.style
-            .format({"Credit Received": "${:.2f}", "P&L": "${:+.2f}"})
+            .format({"Credit / Contract": "${:.2f}", "Total Credit": "${:,.2f}",
+                     "P&L": "${:+.2f}"})
             .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "", subset=["P&L"]),
             width="stretch", height=table_height(len(view_df)), hide_index=True,
         )
