@@ -1413,6 +1413,20 @@ else:
     hist_df = DAILY_PNL_DF if view_type == "Daily" else MONTHLY_PNL_DF
     period_label = "Date" if view_type == "Daily" else "Month"
 
+    # Date filtering
+    st.markdown('<div style="margin: 1rem 0; font-size: 11px; color: var(--text-secondary); text-transform: uppercase">Filter</div>', unsafe_allow_html=True)
+    filter_cols = st.columns(2)
+    with filter_cols[0]:
+        start_date = st.date_input(
+            "From", hist_df["period"].min() if not hist_df.empty else None,
+            key="history_start_date",
+        )
+    with filter_cols[1]:
+        end_date = st.date_input(
+            "To", hist_df["period"].max() if not hist_df.empty else None,
+            key="history_end_date",
+        )
+
     if hist_df.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1420,47 +1434,57 @@ else:
             unsafe_allow_html=True,
         )
     else:
-        total_trades = int(hist_df["trades"].sum())
-        total_pnl = float(hist_df["pnl"].sum())
-        total_wins = int(hist_df["wins"].sum())
-        win_rate = (100 * total_wins / total_trades) if total_trades else 0.0
-        best = hist_df.loc[hist_df["pnl"].idxmax()]
+        # Apply date filter
+        hist_df = hist_df[(hist_df["period"] >= start_date) & (hist_df["period"] <= end_date)].copy()
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric(f"Total Trades ({len(hist_df)} {'days' if view_type == 'Daily' else 'months'})", total_trades)
-        m2.metric("Total P&L", f"${total_pnl:+,.2f}")
-        m3.metric("Win Rate", f"{win_rate:.0f}%", f"{total_wins} wins")
-        m4.metric(f"Best {period_label}", f"${float(best['pnl']):+,.2f}", str(best["period"]))
+        if hist_df.empty:
+            st.markdown(
+                '<div class="empty-state"><div class="big">∅</div>'
+                f'No trades in the selected date range.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            total_trades = int(hist_df["trades"].sum())
+            total_pnl = float(hist_df["pnl"].sum())
+            total_wins = int(hist_df["wins"].sum())
+            win_rate = (100 * total_wins / total_trades) if total_trades else 0.0
+            best = hist_df.loc[hist_df["pnl"].idxmax()]
 
-        section_header("📊", f"P&amp;L by {period_label}", "green = profit · red = loss")
-        st.altair_chart(
-            static_bar(hist_df, "period", "pnl", period_label, "P&L ($)", diverging=True),
-            use_container_width=True,
-        )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(f"Total Trades ({len(hist_df)} {'days' if view_type == 'Daily' else 'months'})", total_trades)
+            m2.metric("Total P&L", f"${total_pnl:+,.2f}")
+            m3.metric("Win Rate", f"{win_rate:.0f}%", f"{total_wins} wins")
+            m4.metric(f"Best {period_label}", f"${float(best['pnl']):+,.2f}", str(best["period"]))
 
-        section_header("🔢", f"Trades per {period_label}")
-        st.altair_chart(
-            static_bar(hist_df, "period", "trades", period_label, "Trades", color="#58a6ff"),
-            use_container_width=True,
-        )
+            section_header("📊", f"P&amp;L by {period_label}", "green = profit · red = loss")
+            st.altair_chart(
+                static_bar(hist_df, "period", "pnl", period_label, "P&L ($)", diverging=True),
+                use_container_width=True,
+            )
 
-        section_header("📋", f"{period_label} Breakdown")
-        summary_df = hist_df.copy()
-        summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
-        summary_df = summary_df.rename(columns={
-            "period": period_label,
-            "trades": "Trades",
-            "wins": "Wins",
-            "pnl": "P&L",
-            "win_rate": "Win %",
-        })
-        summary_df = summary_df[[period_label, "Trades", "Wins", "Win %", "P&L"]]
-        st.dataframe(
-            summary_df.sort_values(period_label, ascending=False).style
-            .format({"P&L": "${:+.2f}", "Win %": "{:.0f}%"})
-            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0
-                 else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "",
-                 subset=["P&L"]),
-            width='stretch', hide_index=True, height=320,
-        )
+            section_header("🔢", f"Trades per {period_label}")
+            st.altair_chart(
+                static_bar(hist_df, "period", "trades", period_label, "Trades", color="#58a6ff"),
+                use_container_width=True,
+            )
+
+            section_header("📋", f"{period_label} Breakdown")
+            summary_df = hist_df.copy()
+            summary_df["win_rate"] = (summary_df["wins"] / summary_df["trades"] * 100).round(0).astype(int)
+            summary_df = summary_df.rename(columns={
+                "period": period_label,
+                "trades": "Trades",
+                "wins": "Wins",
+                "pnl": "P&L",
+                "win_rate": "Win %",
+            })
+            summary_df = summary_df[[period_label, "Trades", "Wins", "Win %", "P&L"]]
+            st.dataframe(
+                summary_df.sort_values(period_label, ascending=False).style
+                .format({"P&L": "${:+.2f}", "Win %": "{:.0f}%"})
+                .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0
+                     else "color: #ff4b4b" if isinstance(v, (int, float)) and v < 0 else "",
+                     subset=["P&L"]),
+                width='stretch', hide_index=True, height=320,
+            )
 
