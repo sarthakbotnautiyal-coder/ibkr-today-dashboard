@@ -1315,40 +1315,32 @@ with row2_l:
         )
     else:
         view_df = CLOSED_DF.copy()
-        view_df["strike"] = view_df.apply(
+        view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
-        view_df["Entry"] = view_df["open_time"].apply(_parse_hhmm)
-        view_df["Exit"] = view_df["close_time"].apply(_parse_hhmm)
-        view_df["Hold"] = view_df.apply(lambda r: _parse_hold(r["open_time"], r["close_time"]), axis=1)
-        view_df["Reason"] = view_df.apply(
+        view_df["Exit Reason"] = view_df.apply(
             lambda r: "EOD_EXPIRE" if r["status"] == "expired" else r["exit_regime"].upper()
                 if pd.notna(r.get("exit_regime")) else "—",
             axis=1,
         )
-        view_df = view_df.rename(columns={"id": "Pos #", "side": "Side", "credit": "Credit", "pnl": "PnL"})
-        view_df = view_df[["Pos #", "Side", "strike", "Entry", "Exit", "Hold", "Credit", "PnL", "Reason"]]
+        view_df = view_df.rename(columns={
+            "id": "Pos #",
+            "side": "Side",
+            "credit": "Credit Received",
+            "pnl": "P&L"
+        })
+        view_df = view_df[["Pos #", "Side", "Strike", "Credit Received", "P&L", "Exit Reason"]]
         st.dataframe(
             view_df.style
-            .format({"Credit": "${:.2f}", "PnL": "${:+.2f}"})
-            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "", subset=["PnL"]),
-            width='stretch', hide_index=True, height=108,
+            .format({"Credit Received": "${:.2f}", "P&L": "${:+.2f}"})
+            .map(lambda v: "color: #00d97e" if isinstance(v, (int, float)) and v > 0 else "", subset=["P&L"]),
+            width='stretch', hide_index=True, height=120,
         )
 
         total_pnl = float(CLOSED_DF["pnl"].sum())
         wins = int((CLOSED_DF["pnl"] > 0).sum())
         n = len(CLOSED_DF)
         win_rate = (100 * wins / n) if n else 0
-        # avg hold via min
-        holds_secs = []
-        for _, r in CLOSED_DF.iterrows():
-            try:
-                o = datetime.fromisoformat(r["open_time"])
-                c = datetime.fromisoformat(r["close_time"])
-                holds_secs.append((c - o).total_seconds())
-            except Exception:
-                pass
-        avg_hold_min = int(sum(holds_secs) / len(holds_secs) / 60) if holds_secs else 0
 
         pnl_class = "green" if total_pnl > 0 else ""
         st.markdown(
@@ -1356,7 +1348,6 @@ with row2_l:
             f'<div>count <span class="fv">{n}</span></div>'
             f'<div>total P/L <span class="fv {pnl_class}">${total_pnl:+.2f}</span></div>'
             f'<div>win rate <span class="fv">{win_rate:.0f}%</span></div>'
-            f'<div>avg hold <span class="fv">{avg_hold_min // 60}h{avg_hold_min % 60:02d}m</span></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
