@@ -1413,20 +1413,6 @@ else:
     hist_df = DAILY_PNL_DF if view_type == "Daily" else MONTHLY_PNL_DF
     period_label = "Date" if view_type == "Daily" else "Month"
 
-    # Date filtering
-    st.markdown('<div style="margin: 1rem 0; font-size: 11px; color: var(--text-secondary); text-transform: uppercase">Filter</div>', unsafe_allow_html=True)
-    filter_cols = st.columns(2)
-    with filter_cols[0]:
-        start_date = st.date_input(
-            "From", hist_df["period"].min() if not hist_df.empty else None,
-            key="history_start_date",
-        )
-    with filter_cols[1]:
-        end_date = st.date_input(
-            "To", hist_df["period"].max() if not hist_df.empty else None,
-            key="history_end_date",
-        )
-
     if hist_df.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1434,13 +1420,54 @@ else:
             unsafe_allow_html=True,
         )
     else:
-        # Apply date filter
-        hist_df = hist_df[(hist_df["period"] >= start_date) & (hist_df["period"] <= end_date)].copy()
+        # Range filter. Both rollups store `period` as a SQLite text column
+        # ('2026-06-23' daily, '2026-06' monthly), so the widget values are
+        # matched to that representation rather than compared against dates.
+        #
+        # The two views get different widgets on purpose: a day-granular
+        # calendar is meaningless on a monthly rollup, where the only
+        # selectable boundaries are whole months.
+        with st.expander("🔎 Filter range", expanded=False):
+            if view_type == "Daily":
+                bounds = pd.to_datetime(hist_df["period"])
+                lo, hi = bounds.min().date(), bounds.max().date()
+                f1, f2 = st.columns(2)
+                start_sel = f1.date_input(
+                    "From", lo, min_value=lo, max_value=hi, key="hist_start_day",
+                )
+                end_sel = f2.date_input(
+                    "To", hi, min_value=lo, max_value=hi, key="hist_end_day",
+                )
+                # Back to the 'YYYY-MM-DD' text the column actually holds.
+                start_key, end_key = start_sel.isoformat(), end_sel.isoformat()
+            else:
+                # 'YYYY-MM' sorts lexicographically, so plain string
+                # comparison is already chronological.
+                months = sorted(hist_df["period"].unique())
+                f1, f2 = st.columns(2)
+                start_key = f1.selectbox("From", months, index=0, key="hist_start_month")
+                end_key = f2.selectbox(
+                    "To", months, index=len(months) - 1, key="hist_end_month",
+                )
+
+        if start_key > end_key:
+            st.warning(f"'From' ({start_key}) is after 'To' ({end_key}) — showing nothing.")
+
+        full_count = len(hist_df)
+        hist_df = hist_df[
+            (hist_df["period"] >= start_key) & (hist_df["period"] <= end_key)
+        ].copy()
+
+        if len(hist_df) < full_count:
+            st.caption(
+                f"Filtered to {start_key} → {end_key} "
+                f"({len(hist_df)} of {full_count} {'days' if view_type == 'Daily' else 'months'})"
+            )
 
         if hist_df.empty:
             st.markdown(
                 '<div class="empty-state"><div class="big">∅</div>'
-                f'No trades in the selected date range.</div>',
+                'No trades in the selected range.</div>',
                 unsafe_allow_html=True,
             )
         else:
