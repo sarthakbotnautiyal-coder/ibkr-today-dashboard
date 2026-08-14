@@ -1031,7 +1031,7 @@ def panel3_signal_intent() -> dict:
 
 def panel4_open_positions() -> tuple[pd.DataFrame, str | None]:
     df, err = safe_query(
-        "SELECT id, ticker, side, short_strike, long_strike, credit, num_contracts "
+        "SELECT id, ticker, side, short_strike, long_strike, credit, fill_price, num_contracts "
         "FROM positions "
         "WHERE status = 'open' AND DATE(open_time) <= DATE('now', '-4 hours') "
         "ORDER BY id DESC"
@@ -1305,6 +1305,28 @@ def section_header(icon: str, label: str, note: str = "") -> None:
 OPTION_MULTIPLIER = 100  # shares per option contract
 
 
+def credit_per_contract(row) -> float:
+    """Premium actually received per contract.
+
+    Prefers `fill_price` — the real execution price from the broker — over
+    `credit`, which is the quoted credit at signal time. They disagree on 47 of
+    73 filled positions in this book, and 42 of those filled *worse* than
+    quoted, so `credit` flatters what was actually collected.
+
+    fill_price is stored negative (IBKR signs a credit as money received), so
+    the magnitude is taken. Falls back to `credit` when fill_price is NULL,
+    which happens for positions recorded before fill capture existed.
+
+    CAVEAT: the engine books pnl/upnl off `credit`, not fill_price, so P&L
+    columns are on a different basis than the credit columns. See the note in
+    total_credit().
+    """
+    fp = row.get("fill_price") if hasattr(row, "get") else None
+    if fp is not None and pd.notna(fp):
+        return abs(float(fp))
+    return float(row["credit"] or 0.0)
+
+
 def total_credit(credit_per_contract: float, num_contracts: float) -> float:
     """Actual dollars collected at entry.
 
@@ -1436,7 +1458,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
         unsafe_allow_html=True,
     )
 
-    section_header("📍", "Open Positions")
+    section_header("📍", "Open Positions", "credit = actual fill · P&amp;L = engine (quoted)")
     if OPEN_POS_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1444,7 +1466,11 @@ if ACTIVE_PAGE == PAGE_LIVE:
             unsafe_allow_html=True,
         )
     else:
-        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit", "num_contracts", "upnl", "exit_votes"]].copy()
+        view_df = OPEN_POS_DF[["id", "side", "short_strike", "long_strike", "credit",
+                               "fill_price", "num_contracts", "upnl", "exit_votes"]].copy()
+        # Actual execution price, not the quoted credit.
+        view_df["credit"] = view_df.apply(credit_per_contract, axis=1)
+        view_df = view_df.drop(columns=["fill_price"])
         view_df = view_df.dropna(how='all')
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
@@ -1472,7 +1498,7 @@ if ACTIVE_PAGE == PAGE_LIVE:
             width="stretch", height=table_height(len(view_df)), hide_index=True,
         )
 
-    section_header("✅", "Closed Today")
+    section_header("✅", "Closed Today", "credit = actual fill · P&amp;L = engine (quoted)")
     if CLOSED_DF.empty:
         st.markdown(
             '<div class="empty-state"><div class="big">∅</div>'
@@ -1482,6 +1508,8 @@ if ACTIVE_PAGE == PAGE_LIVE:
     else:
         view_df = CLOSED_DF.copy()
         view_df = view_df.dropna(how='all')
+        # Actual execution price, not the quoted credit.
+        view_df["credit"] = view_df.apply(credit_per_contract, axis=1)
         view_df["Strike"] = view_df.apply(
             lambda r: f"{int(r['short_strike'])}/{int(r['long_strike']) if pd.notna(r['long_strike']) else '?'}", axis=1
         )
